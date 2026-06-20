@@ -3,9 +3,9 @@
     "name": "本地图片缓存代理",
     "description": "将 TMDB 图片缓存到本地，通过插件 API 提供快速访问。自动替换所有 TMDB 图片 URL 为本地缓存地址，首次访问自动从 TMDB 下载缓存，后续直接返回本地文件。",
     "version": "1.0.0",
-    "icon": "image.png",
+    "icon": "icon.svg",
     "labels": "消息通知",
-    "author": "local",
+    "author": "wenzhanquan",
     "release": false
   }
 }
