@@ -4,27 +4,35 @@
       <stop offset="0%" style="stop-color:#667eea"/>
       <stop offset="100%" style="stop-color:#764ba2"/>
     </linearGradient>
-    <linearGradient id="frame" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#ffffff"/>
-      <stop offset="100%" style="stop-color:#e0e0e0"/>
-    </linearGradient>
   </defs>
-  <!-- Background circle -->
-  <circle cx="50" cy="50" r="48" fill="url(#bg)" opacity="0.9"/>
-  <!-- Picture frame -->
-  <rect x="22" y="24" width="38" height="32" rx="3" fill="url(#frame)" stroke="#ccc" stroke-width="1"/>
-  <!-- Image inside frame (mountain/sun) -->
-  <circle cx="35" cy="34" r="4" fill="#667eea" opacity="0.6"/>
-  <polygon points="28,50 38,38 45,46 50,38 58,50" fill="#667eea" opacity="0.4"/>
-  <!-- Cache/storage cylinder at bottom -->
-  <ellipse cx="62" cy="60" rx="14" ry="6" fill="#fff" opacity="0.85"/>
-  <path d="M48 60 L48 72 Q48 78 62 78 Q76 78 76 72 L76 60" fill="#fff" opacity="0.85"/>
-  <ellipse cx="62" cy="60" rx="14" ry="6" fill="#667eea" opacity="0.25"/>
-  <!-- Refresh/network arrows -->
-  <path d="M55 68 Q55 64 59 62 Q63 60 67 62" fill="none" stroke="#764ba2" stroke-width="1.5" stroke-linecap="round"/>
-  <polygon points="67,60 69,64 65,63" fill="#764ba2"/>
-  <path d="M69 72 Q69 76 65 78 Q61 80 57 78" fill="none" stroke="#764ba2" stroke-width="1.5" stroke-linecap="round"/>
-  <polygon points="57,80 55,76 59,77" fill="#764ba2"/>
-  <!-- TMDB star -->
-  <text x="74" y="30" font-family="Arial" font-size="12" fill="#ffd700" font-weight="bold">★</text>
+  <rect width="100" height="100" rx="20" fill="url(#bg)"/>
+  <!-- Film strip - left -->
+  <rect x="18" y="22" width="8" height="46" rx="2" fill="#fff" opacity="0.9"/>
+  <!-- Film strip - right -->
+  <rect x="60" y="22" width="8" height="46" rx="2" fill="#fff" opacity="0.9"/>
+  <!-- Film holes left -->
+  <rect x="20" y="26" width="4" height="3" rx="1" fill="#667eea" opacity="0.4"/>
+  <rect x="20" y="33" width="4" height="3" rx="1" fill="#667eea" opacity="0.4"/>
+  <rect x="20" y="40" width="4" height="3" rx="1" fill="#667eea" opacity="0.4"/>
+  <rect x="20" y="47" width="4" height="3" rx="1" fill="#667eea" opacity="0.4"/>
+  <rect x="20" y="54" width="4" height="3" rx="1" fill="#667eea" opacity="0.4"/>
+  <rect x="20" y="61" width="4" height="3" rx="1" fill="#667eea" opacity="0.4"/>
+  <!-- Film holes right -->
+  <rect x="62" y="26" width="4" height="3" rx="1" fill="#667eea" opacity="0.4"/>
+  <rect x="62" y="33" width="4" height="3" rx="1" fill="#667eea" opacity="0.4"/>
+  <rect x="62" y="40" width="4" height="3" rx="1" fill="#667eea" opacity="0.4"/>
+  <rect x="62" y="47" width="4" height="3" rx="1" fill="#667eea" opacity="0.4"/>
+  <rect x="62" y="54" width="4" height="3" rx="1" fill="#667eea" opacity="0.4"/>
+  <rect x="62" y="61" width="4" height="3" rx="1" fill="#667eea" opacity="0.4"/>
+  <!-- Image/picture frame -->
+  <rect x="30" y="24" width="26" height="22" rx="2" fill="#fff" opacity="0.95"/>
+  <circle cx="40" cy="32" r="3" fill="#667eea" opacity="0.5"/>
+  <polygon points="32,43 40,33 45,40 48,34 55,44" fill="#667eea" opacity="0.35"/>
+  <!-- Download arrow into cache box -->
+  <rect x="34" y="52" width="18" height="14" rx="3" fill="#fff" opacity="0.9"/>
+  <line x1="43" y1="56" x2="43" y2="62" stroke="#667eea" stroke-width="2" stroke-linecap="round"/>
+  <polyline points="40,60 43,63 46,60" fill="none" stroke="#667eea" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- TMDB star badge -->
+  <circle cx="76" cy="30" r="10" fill="#ffd700" opacity="0.95"/>
+  <text x="76" y="35" font-family="Arial" font-size="16" fill="#fff" text-anchor="middle" font-weight="bold">★</text>
 </svg>
