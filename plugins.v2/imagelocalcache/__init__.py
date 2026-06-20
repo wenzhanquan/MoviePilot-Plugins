@@ -31,7 +31,7 @@ class ImageLocalCache(_PluginBase):
     plugin_icon = "image.png"
     plugin_version = "1.0.0"
     plugin_label = "消息通知"
-    plugin_author = "local"
+    plugin_author = "wenzhanquan"
     plugin_config_prefix = "imagelocalcache_"
     plugin_order = 100
     auth_level = 1
