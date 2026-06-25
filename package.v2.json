@@ -32,5 +32,17 @@
     "history": {
       "v1.0.0": "初始版本"
     }
+  },
+  "QlCookieCheck": {
+    "name": "青龙Cookie检测",
+    "description": "定时检测青龙面板中京东Cookie等环境变量是否过期",
+    "version": "1.0",
+    "icon": "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/autosignin.png",
+    "labels": "站点工具",
+    "author": "wenzhanquan",
+    "level": 1,
+    "history": {
+      "v1.0": "初始版本"
+    }
   }
 }
