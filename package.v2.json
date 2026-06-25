@@ -19,5 +19,18 @@
     "history": {
       "v1.0": "初始版本"
     }
+  },
+  "CaishenPTShout": {
+    "name": "财神PT喊话",
+    "description": "定时在财神PT站点群聊区发送喊话消息，如「财神，求上传」等。自动读取站点Cookie，支持自定义喊话内容和定时间隔。",
+    "version": "1.0.0",
+    "icon": "caishen.svg",
+    "labels": "站点工具",
+    "author": "wenzhanquan",
+    "level": 1,
+    "system_version": ">=2.12.0",
+    "history": {
+      "v1.0.0": "初始版本"
+    }
   }
 }
