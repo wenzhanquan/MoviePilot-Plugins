@@ -1,5 +1,6 @@
 import os
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
@@ -45,6 +46,8 @@ class ImageLocalCache(_PluginBase):
     _proxy_base_url: str = ""
     # 保存原始 get_message_image 方法引用
     _original_get_message_image = None
+    _original_get_poster_image = None
+    _original_get_backdrop_image = None
 
     def init_plugin(self, config: dict = None) -> None:
         """
@@ -90,9 +93,9 @@ class ImageLocalCache(_PluginBase):
             f"{self._external_domain}/api/v1/plugin/ImageLocalCache/img?url="
         )
 
-        # Monkey-patch MediaInfo.get_message_image
-        # 将返回的 TMDB 图片 URL 替换为本地缓存代理地址
-        self._patch_get_message_image()
+        # 更新模块级 proxy_base，使模块级 patch 生效
+        global _module_proxy_base
+        _module_proxy_base = self._proxy_base_url
 
         logger.info(f"本地图片缓存代理插件初始化完成，代理基础 URL: {self._proxy_base_url}")
 
@@ -264,265 +267,184 @@ class ImageLocalCache(_PluginBase):
 
     def get_page(self) -> Optional[List[dict]]:
         """
-        返回插件详情页面。
-
-        展示运行状态、缓存统计和配置信息。
-
-        :return: 页面组件列表，插件未启用时返回 None
+        返回插件详情页面，展示运行状态和最近缓存记录。
         """
         if not self._enabled:
             return self._build_disabled_page()
 
         cache_size = self._get_cache_size()
         cache_count = self._get_cache_count()
-        is_patched = self._original_get_message_image is not None
-        status_color = "success" if is_patched else "warning"
+        source_domain = self._original_tmdb_domain or settings.TMDB_IMAGE_DOMAIN
+        history = self.get_data("_history") or []
+        if not isinstance(history, list):
+            history = []
+        recent = history[:10]
+
+        cards = [
+            {
+                "component": "VCol",
+                "props": {"cols": 12, "md": 4},
+                "content": [{
+                    "component": "VCard",
+                    "props": {"variant": "outlined"},
+                    "content": [{
+                        "component": "VCardText",
+                        "props": {"class": "pa-4"},
+                        "content": [{
+                            "component": "div",
+                            "props": {"class": "text-h6 font-weight-bold text-success"},
+                            "text": "运行中"
+                        }, {
+                            "component": "div",
+                            "props": {"class": "text-caption text-medium-emphasis"},
+                            "text": "代理状态"
+                        }]
+                    }]
+                }]
+            },
+            {
+                "component": "VCol",
+                "props": {"cols": 12, "md": 4},
+                "content": [{
+                    "component": "VCard",
+                    "props": {"variant": "outlined"},
+                    "content": [{
+                        "component": "VCardText",
+                        "props": {"class": "pa-4"},
+                        "content": [{
+                            "component": "div",
+                            "props": {"class": "text-h6 font-weight-bold"},
+                            "text": str(cache_count)
+                        }, {
+                            "component": "div",
+                            "props": {"class": "text-caption text-medium-emphasis"},
+                            "text": "缓存文件数"
+                        }]
+                    }]
+                }]
+            },
+            {
+                "component": "VCol",
+                "props": {"cols": 12, "md": 4},
+                "content": [{
+                    "component": "VCard",
+                    "props": {"variant": "outlined"},
+                    "content": [{
+                        "component": "VCardText",
+                        "props": {"class": "pa-4"},
+                        "content": [{
+                            "component": "div",
+                            "props": {"class": "text-h6 font-weight-bold"},
+                            "text": cache_size
+                        }, {
+                            "component": "div",
+                            "props": {"class": "text-caption text-medium-emphasis"},
+                            "text": "缓存总大小"
+                        }]
+                    }]
+                }]
+            }
+        ]
+
+        rows = []
+        for r in recent:
+            title = r.get("title", "")
+            img_type = r.get("type", "")
+            time = r.get("time", "")
+            rows.append({
+                "component": "tr",
+                "content": [
+                    {"component": "td", "text": title},
+                    {"component": "td", "props": {"class": "text-center"}, "text": img_type},
+                    {"component": "td", "text": time}
+                ]
+            })
+
+        if not rows:
+            table_alert = {
+                "component": "VAlert",
+                "props": {
+                    "type": "info",
+                    "variant": "tonal",
+                    "text": "暂无缓存记录，媒体入库后将自动记录"
+                }
+            }
+        else:
+            table_alert = {
+                "component": "VTable",
+                "props": {"hover": True, "density": "compact"},
+                "content": [
+                    {"component": "thead", "content": [{"component": "tr", "content": [
+                        {"component": "th", "props": {"class": "text-start"}, "text": "媒体名称"},
+                        {"component": "th", "props": {"class": "text-center"}, "text": "图片类型"},
+                        {"component": "th", "text": "缓存时间"}
+                    ]}]},
+                    {"component": "tbody", "content": rows}
+                ]
+            }
 
         return [
-            # 状态卡片
+            # 3 个统计卡片
+            {"component": "VRow", "content": cards},
+            # 最近缓存记录
             {
                 "component": "VRow",
-                "content": [
-                    {
-                        "component": "VCol",
-                        "props": {"cols": 12, "md": 4},
-                        "content": [
-                            {
-                                "component": "VCard",
-                                "props": {"variant": "outlined"},
-                                "content": [
-                                    {
-                                        "component": "VCardItem",
-                                        "content": [
-                                            {
-                                                "component": "VCardTitle",
-                                                "props": {"text": "运行状态"}
-                                            },
-                                            {
-                                                "component": "VChip",
-                                                "props": {
-                                                    "color": status_color,
-                                                    "text": "已启用 - 代理运行中" if is_patched else "已启用 - 待初始化",
-                                                    "class": "mt-2"
-                                                }
-                                            }
-                                        ]
-                                    }
-                                ]
-                            }
-                        ]
-                    },
-                    {
-                        "component": "VCol",
-                        "props": {"cols": 12, "md": 8},
-                        "content": [
-                            {
-                                "component": "VCard",
-                                "props": {"variant": "outlined"},
-                                "content": [
-                                    {
-                                        "component": "VCardItem",
-                                        "content": [
-                                            {
-                                                "component": "VCardTitle",
-                                                "props": {"text": "代理服务"}
-                                            },
-                                            {
-                                                "component": "VCardText",
-                                                "props": {
-                                                    "text": f"基础地址：{self._proxy_base_url}"
-                                                }
-                                            },
-                                            {
-                                                "component": "VCardText",
-                                                "props": {
-                                                    "text": f"回源地址：{self._original_tmdb_domain}"
-                                                }
-                                            }
-                                        ]
-                                    }
-                                ]
-                            }
-                        ]
-                    }
-                ]
-            },
-            # 缓存统计卡片
-            {
-                "component": "VRow",
-                "props": {"class": "mt-4"},
-                "content": [
-                    {
-                        "component": "VCol",
-                        "props": {"cols": 12, "md": 6},
-                        "content": [
-                            {
-                                "component": "VCard",
-                                "props": {"variant": "outlined"},
-                                "content": [
-                                    {
-                                        "component": "VCardItem",
-                                        "content": [
-                                            {
-                                                "component": "VCardTitle",
-                                                "props": {"text": "缓存统计"}
-                                            },
-                                            {
-                                                "component": "VList",
-                                                "props": {"density": "compact"},
-                                                "content": [
-                                                    {
-                                                        "component": "VListItem",
-                                                        "props": {
-                                                            "title": f"缓存文件数",
-                                                            "subtitle": f"{cache_count} 个文件"
-                                                        }
-                                                    },
-                                                    {
-                                                        "component": "VListItem",
-                                                        "props": {
-                                                            "title": f"缓存总大小",
-                                                            "subtitle": cache_size
-                                                        }
-                                                    },
-                                                    {
-                                                        "component": "VListItem",
-                                                        "props": {
-                                                            "title": f"缓存目录",
-                                                            "subtitle": self._cache_dir
-                                                        }
-                                                    }
-                                                ]
-                                            }
-                                        ]
-                                    }
-                                ]
-                            }
-                        ]
-                    },
-                    {
-                        "component": "VCol",
-                        "props": {"cols": 12, "md": 6},
-                        "content": [
-                            {
-                                "component": "VCard",
-                                "props": {"variant": "outlined"},
-                                "content": [
-                                    {
-                                        "component": "VCardItem",
-                                        "content": [
-                                            {
-                                                "component": "VCardTitle",
-                                                "props": {"text": "配置信息"}
-                                            },
-                                            {
-                                                "component": "VList",
-                                                "props": {"density": "compact"},
-                                                "content": [
-                                                    {
-                                                        "component": "VListItem",
-                                                        "props": {
-                                                            "title": "外网域名",
-                                                            "subtitle": self._external_domain
-                                                        }
-                                                    },
-                                                    {
-                                                        "component": "VListItem",
-                                                        "props": {
-                                                            "title": "替换方式",
-                                                            "subtitle": "MediaInfo.get_message_image() Monkey-Patch"
-                                                        }
-                                                    },
-                                                    {
-                                                        "component": "VListItem",
-                                                        "props": {
-                                                            "title": "缓存命中",
-                                                            "subtitle": "首次请求自动回源下载，后续从本地返回"
-                                                        }
-                                                    }
-                                                ]
-                                            }
-                                        ]
-                                    }
-                                ]
-                            }
-                        ]
-                    }
-                ]
-            },
-            # 使用说明
-            {
-                "component": "VRow",
-                "props": {"class": "mt-4"},
-                "content": [
-                    {
-                        "component": "VCol",
-                        "props": {"cols": 12},
-                        "content": [
-                            {
-                                "component": "VAlert",
-                                "props": {
-                                    "type": "info",
-                                    "variant": "tonal",
-                                    "title": "工作流程",
-                                    "text": (
-                                        "入库完成 → 通知消息中的图片URL自动替换为本地缓存地址 "
-                                        "→ 企业微信请求本地缓存 → 插件从缓存目录返回图片 "
-                                        "（首次从TMDB下载并缓存）"
-                                    )
-                                }
-                            }
-                        ]
-                    }
-                ]
+                "props": {"class": "mt-2"},
+                "content": [{
+                    "component": "VCol",
+                    "props": {"cols": 12},
+                    "content": [{
+                        "component": "VCard",
+                        "props": {"title": "最近10条缓存记录", "variant": "outlined"},
+                        "content": [{
+                            "component": "VCardText",
+                            "props": {"class": "pa-4"},
+                            "content": [table_alert]
+                        }]
+                    }]
+                }]
             }
         ]
 
     def _build_disabled_page(self) -> List[dict]:
         """
         构建插件未启用时的页面。
-
-        :return: 页面组件列表
         """
-        return [
-            {
-                "component": "VRow",
-                "content": [
-                    {
-                        "component": "VCol",
-                        "props": {"cols": 12},
-                        "content": [
-                            {
-                                "component": "VAlert",
-                                "props": {
-                                    "type": "warning",
-                                    "variant": "tonal",
-                                    "title": "插件未启用",
-                                    "text": "请在设置中启用插件并配置外网域名后保存，图片缓存代理功能将自动生效。"
-                                }
-                            }
-                        ]
+        return [{
+            "component": "VRow",
+            "content": [{
+                "component": "VCol",
+                "props": {"cols": 12},
+                "content": [{
+                    "component": "VAlert",
+                    "props": {
+                        "type": "warning",
+                        "variant": "tonal",
+                        "title": "插件未启用",
+                        "text": "请在设置中启用插件并配置外网域名后保存，图片缓存代理功能将自动生效。"
                     }
-                ]
-            }
-        ]
+                }]
+            }]
+        }]
 
     def stop_service(self) -> None:
         """
         停止插件服务。
 
-        恢复原始的 MediaInfo.get_message_image 方法和 TMDB_IMAGE_DOMAIN。
+        清除模块级 proxy_base，patch 方法保持生效（ProxyBase 为空时不包装）。
         """
-        self._unpatch_get_message_image()
+        global _module_proxy_base
+        _module_proxy_base = ""
         self._enabled = False
 
     @eventmanager.register(EventType.TransferComplete)
     def transfer_complete(self, event) -> None:
         """
-        监听整理完成事件，预缓存媒体图片。
+        监听整理完成事件，预缓存媒体图片并记录缓存记录。
 
         当文件转移完成时，提前下载海报和背景图到本地缓存，
         确保后续通知发送时直接从本地返回。
+        同时将本次缓存操作记录到 _history，保留最近10条。
 
         :param event: 整理完成事件对象
         """
@@ -533,11 +455,25 @@ class ImageLocalCache(_PluginBase):
             if mediainfo:
                 poster = getattr(mediainfo, "poster_path", None)
                 backdrop = getattr(mediainfo, "backdrop_path", None)
+                title = getattr(mediainfo, "title", "") or getattr(mediainfo, "original_title", "")
+                if not title:
+                    title = "未知"
+                now_str = datetime.now().strftime("%m-%d %H:%M")
+                types = []
                 if poster:
                     self._precache_image_url(poster)
+                    types.append("海报")
                 if backdrop:
                     self._precache_image_url(backdrop)
-                logger.info(f"已预缓存媒体图片：{getattr(mediainfo, 'title', '')}")
+                    types.append("背景图")
+                if types:
+                    record = {
+                        "title": title,
+                        "type": "+".join(types),
+                        "time": now_str
+                    }
+                    self._append_history(record)
+                logger.info(f"已预缓存媒体图片：{title}")
         except Exception as e:
             logger.error(f"预缓存图片失败：{e}")
 
@@ -606,6 +542,20 @@ class ImageLocalCache(_PluginBase):
             logger.error(f"下载图片异常：{e}")
 
         return Response(content=b"", status_code=404, media_type="image/jpeg")
+
+    def _append_history(self, record: dict) -> None:
+        """
+        追加缓存记录到历史列表，保留最近10条。
+
+        :param record: 缓存记录字典，包含 title、type、time
+        """
+        history = self.get_data("_history") or []
+        if not isinstance(history, list):
+            history = []
+        history.insert(0, record)
+        if len(history) > 10:
+            history = history[:10]
+        self.save_data("_history", history)
 
     def _precache_image_url(self, url: str) -> None:
         """
@@ -676,3 +626,73 @@ class ImageLocalCache(_PluginBase):
         if content[:4] == b"RIFF" and b"WEBP" in content[:16]:
             return "image/webp"
         return "image/jpeg"
+
+
+# ============================================================
+# 模块级 patch（在 import 时无条件执行，不依赖 init_plugin）
+# 即使 reload 时不触发 init_plugin，patch 也已生效。
+# proxy_base 为空时 URL 原样返回，init_plugin 中设置后自动生效。
+# ============================================================
+
+_module_proxy_base = ""
+_module_original_get_message_image = None
+_module_original_get_poster_image = None
+_module_original_get_backdrop_image = None
+
+
+def _module_patch():
+    """保存原始方法并替换为 patched 版本。重复调用安全（防双重嵌套）。"""
+    global _module_proxy_base, _module_original_get_message_image, _module_original_get_poster_image, \
+        _module_original_get_backdrop_image
+
+    # 从 settings 自动构造 proxy_base，不依赖 init_plugin
+    if not _module_proxy_base and settings.APP_DOMAIN:
+        _module_proxy_base = f"{settings.APP_DOMAIN.rstrip('/')}/api/v1/plugin/ImageLocalCache/img?url="
+
+    # 首次调用时保存原始方法
+    if _module_original_get_message_image is None:
+        _module_original_get_message_image = MediaInfo.get_message_image
+    if _module_original_get_poster_image is None:
+        _module_original_get_poster_image = MediaInfo.get_poster_image
+    if _module_original_get_backdrop_image is None:
+        _module_original_get_backdrop_image = MediaInfo.get_backdrop_image
+
+    def _wrap_url(url):
+        if url and _module_proxy_base and not url.startswith(_module_proxy_base):
+            return f"{_module_proxy_base}{quote(url, safe='')}"
+        return url
+
+    def _patched_get_message_image(self_obj, default=None):
+        url = _module_original_get_message_image(self_obj, default)
+        return _wrap_url(url)
+
+    def _patched_get_poster_image(self_obj, default=None):
+        url = _module_original_get_poster_image(self_obj, default)
+        return _wrap_url(url)
+
+    def _patched_get_backdrop_image(self_obj, default=None):
+        url = _module_original_get_backdrop_image(self_obj, default)
+        return _wrap_url(url)
+
+    MediaInfo.get_message_image = _patched_get_message_image
+    MediaInfo.get_poster_image = _patched_get_poster_image
+    MediaInfo.get_backdrop_image = _patched_get_backdrop_image
+
+
+def _module_unpatch():
+    """恢复原始方法。"""
+    global _module_original_get_message_image, _module_original_get_poster_image, \
+        _module_original_get_backdrop_image
+    if _module_original_get_message_image is not None:
+        MediaInfo.get_message_image = _module_original_get_message_image
+        _module_original_get_message_image = None
+    if _module_original_get_poster_image is not None:
+        MediaInfo.get_poster_image = _module_original_get_poster_image
+        _module_original_get_poster_image = None
+    if _module_original_get_backdrop_image is not None:
+        MediaInfo.get_backdrop_image = _module_original_get_backdrop_image
+        _module_original_get_backdrop_image = None
+
+
+# 模块导入时立即执行 patch
+_module_patch()
