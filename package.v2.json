@@ -44,5 +44,17 @@
     "history": {
       "v1.0": "初始版本"
     }
+  },
+  "AutoSignIn": {
+    "name": "站点自动签到",
+    "description": "自动模拟登录、签到站点。",
+    "version": "2.9.2",
+    "icon": "signin.png",
+    "labels": "站点工具",
+    "author": "wenzhanquan",
+    "level": 1,
+    "history": {
+      "v2.9.2": "修复昨日签到数据被清除导致详情页不显示勾选的问题；修复do列表记录所有配置站点而非实际成功站点的问题"
+    }
   }
 }
