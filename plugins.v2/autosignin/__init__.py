@@ -35,7 +35,7 @@ class AutoSignIn(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wenzhanquan/MoviePilot-Plugins/main/plugins.v2/autosignin/signin.png"
     # 插件版本
-    plugin_version = "2.9.2"
+    plugin_version = "1.0.0"
     plugin_label = "站点工具"
     plugin_author = "wenzhanquan"
     author_url = "https://github.com/wenzhanquan"
