@@ -16,7 +16,7 @@ class MpPluginHealthCheck(_PluginBase):
     plugin_name = "MP插件健康检测"
     plugin_desc = "定时检测已安装插件状态变化"
     plugin_icon = "https://raw.githubusercontent.com/wenzhanquan/MoviePilot-Plugins/main/plugins.v2/mppluginhealthcheck/icon.png"
-    plugin_version = "1.0"
+    plugin_version = "1.0.0"
     plugin_author = "wenzhanquan"
     author_url = "https://github.com/wenzhanquan"
     plugin_order = 31
