@@ -12,9 +12,10 @@
     "name": "MP插件健康检测",
     "description": "定时检测已安装插件状态变化",
     "version": "1.0",
-    "icon": "https://raw.githubusercontent.com/jxxghp/MoviePilot-Plugins/main/icons/autosignin.png",
+    "icon": "https://raw.githubusercontent.com/wenzhanquan/MoviePilot-Plugins/main/plugins.v2/mppluginhealthcheck/icon.svg",
     "labels": "系统工具",
     "author": "wenzhanquan",
+    "author_url": "https://github.com/wenzhanquan",
     "level": 1,
     "history": {
       "v1.0": "初始版本"
