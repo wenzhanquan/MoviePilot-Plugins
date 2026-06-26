@@ -33,12 +33,12 @@ class AutoSignIn(_PluginBase):
     # 插件描述
     plugin_desc = "自动模拟登录、签到站点。"
     # 插件图标
-    plugin_icon = "signin.png"
+    plugin_icon = "signin.svg"
     # 插件版本
     plugin_version = "2.9.2"
     plugin_label = "站点工具"
     plugin_author = "wenzhanquan"
-    # 作者主页
+    author_url = "https://github.com/wenzhanquan"
     # 插件配置项ID前缀
     plugin_config_prefix = "autosignin_"
     # 加载顺序
