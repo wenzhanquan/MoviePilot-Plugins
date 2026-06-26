@@ -1,26 +1,25 @@
 import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
+from functools import wraps
 
-import urllib.request
-import urllib.error
-
-from apscheduler.triggers.cron import CronTrigger
-
+from app.agent.llm import helper as llm_helper_module
 from app.core.config import settings
+from app.core.event import Event as ManagerEvent, eventmanager
 from app.log import logger
 from app.plugins import _PluginBase
-from app.schemas.types import NotificationType
+from app.schemas.types import EventType, NotificationType
 
 
 class LLMApiKeyAutoSwitch(_PluginBase):
     """
-    智能助手 API Key 自动切换插件。
-    当检测到当前 API Key 额度耗尽时，自动切换到备用 Key。
+    免费 token API Key 自动切换插件。
+    支持主 Key + 多个备用 Key 轮询切换。
+    检测到连续多次 API 返回 401/402/429 时，自动切换到下一个备用 Key。
     """
 
-    plugin_name = "API Key 自动切换"
-    plugin_desc = "检测 API Key 额度，耗尽时自动切换到备用 Key。"
+    plugin_name = "免费token Api Key自动切换"
+    plugin_desc = "支持主 Key + 多组备用 Key 轮询切换，检测到额度耗尽时自动依次切换。"
     plugin_icon = "https://raw.githubusercontent.com/wenzhanquan/MoviePilot-Plugins/main/plugins.v2/llmapikeyautoswitch/icon.png"
     plugin_version = "1.0.0"
     plugin_label = "系统工具"
@@ -32,221 +31,210 @@ class LLMApiKeyAutoSwitch(_PluginBase):
 
     _enabled: bool = False
     _primary_key: str = ""
-    _backup_key: str = ""
+    _backup_count: int = 1
+    _backup_keys: List[str] = []
     _notify: bool = True
-    _cron: str = "0 */6 * * *"
+    _retry_401: int = 3
+    _retry_402: int = 3
+    _retry_429: int = 3
+
+    _original_build_func = None
 
     def init_plugin(self, config: dict = None) -> None:
         """根据插件配置初始化运行状态。"""
-        self.stop_service()
+        self._restore_build()
 
         if not config:
             return
 
         self._enabled = bool(config.get("enabled", False))
         self._primary_key = str(config.get("primary_key") or "")
-        self._backup_key = str(config.get("backup_key") or "")
+        self._backup_count = max(1, int(config.get("backup_count") or 1))
+        self._retry_401 = int(config.get("retry_401") or 3)
+        self._retry_402 = int(config.get("retry_402") or 3)
+        self._retry_429 = int(config.get("retry_429") or 3)
         self._notify = bool(config.get("notify", True))
-        self._cron = str(config.get("cron") or "0 */6 * * *")
+
+        # 读取所有备用 Key
+        self._backup_keys = []
+        for i in range(1, self._backup_count + 1):
+            k = str(config.get(f"backup_key_{i}", "") or "")
+            self._backup_keys.append(k)
 
         if not self._enabled:
-            logger.info("API Key 自动切换插件未启用")
+            logger.info("免费token Api Key自动切换插件未启用")
             return
 
-        if not self._primary_key or not self._backup_key:
-            logger.warning("API Key 自动切换插件：主 Key 和备用 Key 都必须配置")
+        if not self._primary_key:
+            logger.warning("主 API Key 未配置")
             return
 
-        # 注册定时检测任务
-        self._register_scheduler()
+        # 确保当前 LLM_API_KEY 在管理范围内
+        current = settings.LLM_API_KEY or ""
+        all_keys = [self._primary_key] + self._get_backup_keys()
+        if current not in all_keys:
+            logger.info("当前 LLM_API_KEY 不在管理范围内，切换至主 Key")
+            settings.LLM_API_KEY = self._primary_key
 
-        logger.info(f"API Key 自动切换插件已启动，检测间隔: {self._cron}")
+        # 初始化计数器
+        for code in ("401", "402", "429"):
+            key = f"fail_count_{code}"
+            if not self.get_data(key):
+                self.save_data(key, 0)
 
-    def _register_scheduler(self) -> None:
-        """注册定时检测任务。"""
-        try:
-            trigger = CronTrigger.from_cron(self._cron)
-            self._scheduler.add_job(
-                func=self._check_and_switch,
-                trigger=trigger,
-                name="API Key 额度检测",
-            )
-        except Exception as e:
-            logger.error(f"定时任务注册失败: {str(e)}")
+        if not self.get_data("current_status"):
+            self.save_data("current_status", {
+                "current_label": self._get_current_key_label(),
+                "last_switch_time": "无",
+                "last_switch_reason": "无",
+                "last_switch_type": "-",
+            })
 
-    def get_service(self) -> List[Dict[str, Any]]:
-        """返回插件定时服务配置。"""
-        if not self._enabled:
-            return []
-        return [
-            {
-                "id": "api_key_check",
-                "name": "API Key 额度检测",
-                "trigger": CronTrigger.from_cron(self._cron),
-                "func": self._check_and_switch,
-                "kwargs": {},
-            }
-        ]
+        self._apply_patch()
+        key_count = 1 + self._backup_count
+        logger.info(
+            f"免费token Api Key自动切换已启动，共 {key_count} 个 Key 轮询，"
+            f"401={self._retry_401}次 402={self._retry_402}次 429={self._retry_429}次"
+        )
+
+    def _get_backup_keys(self) -> List[str]:
+        """获取所有备用 Key 列表（按顺序）。"""
+        return self._backup_keys
+
+    def _get_backup_key(self, index: int) -> str:
+        """获取第 N 个备用 Key（从 1 开始）。"""
+        if 1 <= index <= len(self._backup_keys):
+            return self._backup_keys[index - 1]
+        return ""
+
+    def _get_all_keys(self) -> List[Tuple[str, str]]:
+        """获取所有 Key 列表，返回 [(label, key), ...]。"""
+        result = [("主 API Key", self._primary_key)]
+        for i in range(1, self._backup_count + 1):
+            k = self._get_backup_key(i)
+            if k:
+                result.append((f"备用 Key {i}", k))
+        return result
+
+    def _get_current_key_index(self) -> int:
+        """获取当前 Key 在列表中的索引（0=主，1=备1，2=备2...），不在管理范围返回 -1。"""
+        current = settings.LLM_API_KEY or ""
+        for idx, (label, key) in enumerate(self._get_all_keys()):
+            if key == current:
+                return idx
+        return -1
 
     def _get_current_key_label(self) -> str:
-        """获取当前使用的 Key 是主还是备用。"""
-        current_key = settings.LLM_API_KEY or ""
-        if current_key == self._primary_key:
-            return "主 Key"
-        elif current_key == self._backup_key:
-            return "备用 Key"
-        return "未识别"
+        """获取当前 Key 的名称。"""
+        idx = self._get_current_key_index()
+        if idx < 0:
+            return "未识别"
+        return self._get_all_keys()[idx][0]
 
-    def _check_and_switch(self) -> None:
-        """检测当前 API Key 额度并在耗尽时切换。"""
+    def _apply_patch(self) -> None:
+        """修补 _build_httpx_client，拦截 401/402/429 响应。"""
+        original = llm_helper_module._build_httpx_client
+        self._original_build_func = original
+        plugin_ref = self
+
+        @wraps(original)
+        def patched_build(proxy_url, *, async_client=False, timeout=None):
+            client = original(proxy_url, async_client=async_client, timeout=timeout)
+
+            if async_client:
+                _orig_send = client.send
+                async def _patched_send(request, **kwargs):
+                    response = await _orig_send(request, **kwargs)
+                    plugin_ref._handle_status(response.status_code)
+                    return response
+                client.send = _patched_send
+            else:
+                _orig_send = client.send
+                def _patched_send(request, **kwargs):
+                    response = _orig_send(request, **kwargs)
+                    plugin_ref._handle_status(response.status_code)
+                    return response
+                client.send = _patched_send
+            return client
+
+        llm_helper_module._build_httpx_client = patched_build
+
+    def _restore_build(self) -> None:
+        """恢复原始的 _build_httpx_client。"""
+        if self._original_build_func is not None:
+            llm_helper_module._build_httpx_client = self._original_build_func
+            self._original_build_func = None
+
+    def _handle_status(self, status_code: int) -> None:
+        """处理 HTTP 响应状态码，按状态码分别统计连续失败次数。"""
         if not self._enabled:
             return
 
-        current_key = settings.LLM_API_KEY or ""
-        if not current_key:
-            logger.warning("当前 LLM_API_KEY 为空，尝试切换到主 Key")
-            self._do_switch(self._primary_key, "系统 Key 为空")
-            return
+        if status_code in (401, 402, 429):
+            code = str(status_code)
+            count_key = f"fail_count_{code}"
+            threshold = getattr(self, f"_retry_{code}", 3)
 
-        # 判断当前用的是哪个 Key
-        is_primary = current_key == self._primary_key
-        is_backup = current_key == self._backup_key
+            count = (self.get_data(count_key) or 0) + 1
+            self.save_data(count_key, count)
 
-        if not is_primary and not is_backup:
-            logger.warning(f"当前 LLM_API_KEY 不在插件管理的 Key 中，尝试切换回主 Key")
-            self._do_switch(self._primary_key, "当前 Key 不在管理范围")
-            return
-
-        # 检测当前 Key 是否有额度
-        exhausted, error_msg = self._check_quota(current_key)
-        if exhausted:
-            logger.warning(f"当前 Key 额度已耗尽: {error_msg}")
-            target_key = self._backup_key if is_primary else self._primary_key
-            label = "备用 Key" if is_primary else "主 Key"
-            self._do_switch(target_key, f"当前 {label} 额度耗尽: {error_msg}")
+            if count >= threshold:
+                self._do_switch(f"连续 {count} 次 API 返回 {status_code}")
         else:
-            label = "主 Key" if is_primary else "备用 Key"
-            logger.info(f"当前 {label} 额度正常")
+            for code in ("401", "402", "429"):
+                cur = self.get_data(f"fail_count_{code}") or 0
+                if cur > 0:
+                    self.save_data(f"fail_count_{code}", 0)
 
-    def _check_quota(self, api_key: str) -> Tuple[bool, str]:
-        """
-        检测指定 API Key 是否还有额度。
+    def _get_next_key(self) -> Tuple[str, str]:
+        """获取轮询中的下一个 Key，返回 (label, key)。"""
+        all_keys = self._get_all_keys()
+        idx = self._get_current_key_index()
+        if idx < 0:
+            return all_keys[0] if all_keys else ("", "")
+        next_idx = (idx + 1) % len(all_keys)
+        return all_keys[next_idx]
 
-        :param api_key: 待检测的 API Key
-        :return: (是否已耗尽, 错误信息)
-        """
-        base_url = str(settings.LLM_BASE_URL or "").rstrip("/")
-        model = str(settings.LLM_MODEL or "gpt-3.5-turbo")
-
-        if not base_url:
-            return False, ""
-
-        # 构造 chat completions 请求，只请求 1 个 token 来测试
-        payload = {
-            "model": model,
-            "messages": [{"role": "user", "content": "Hi"}],
-            "max_tokens": 1,
-        }
-        req_data = json.dumps(payload).encode()
-
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
-
-        url = f"{base_url}/chat/completions"
-
-        try:
-            req = urllib.request.Request(url, data=req_data, headers=headers, method="POST")
-            resp = urllib.request.urlopen(req, timeout=15)
-            # 200 表示正常返回，Key 有额度
-            return False, ""
-        except urllib.error.HTTPError as e:
-            body = e.read().decode(errors="replace")
-            status = e.code
-
-            # 额度耗尽相关状态码/错误
-            if status in (401, 402, 403, 429):
-                return True, f"HTTP {status}: {body[:200]}"
-
-            # 检查 body 中是否包含额度耗尽关键词
-            exhausted_keywords = [
-                "insufficient_quota",
-                "quota_exceeded",
-                "rate_limit_exceeded",
-                "exhausted",
-                "insufficient balance",
-                "billing",
-                "credit limit",
-                "payment required",
-                "out of credits",
-                "account suspended",
-                "no available quota",
-                "token quota",
-                "current quota",
-                "429",
-            ]
-            body_lower = body.lower()
-            for kw in exhausted_keywords:
-                if kw in body_lower:
-                    return True, f"额度异常: {body[:200]}"
-
-            # 其他非额度错误（如模型不存在等）不触发切换
-            logger.warning(f"API 请求返回 {status}，非额度错误，不触发切换: {body[:200]}")
-            return False, ""
-        except Exception as e:
-            # 网络超时等临时错误不触发切换
-            logger.warning(f"API 检测请求异常: {str(e)}")
-            return False, ""
-
-    def _do_switch(self, new_key: str, reason: str) -> None:
-        """
-        执行 Key 切换并记录历史。
-
-        :param new_key: 新的 API Key
-        :param reason: 切换原因
-        """
-        old_key = settings.LLM_API_KEY or ""
+    def _do_switch(self, reason: str, trigger_type: str = "自动") -> None:
+        """执行 Key 切换并记录历史。"""
         old_label = self._get_current_key_label()
 
-        # 判断新 key 是主还是备用
-        if new_key == self._primary_key:
-            new_label = "主 Key"
-        elif new_key == self._backup_key:
-            new_label = "备用 Key"
-        else:
-            new_label = "未知"
+        new_label, new_key = self._get_next_key()
+        if not new_key:
+            return
 
-        # 更新运行时的 LLM_API_KEY
         settings.LLM_API_KEY = new_key
 
-        # 记录切换历史
+        for code in ("401", "402", "429"):
+            self.save_data(f"fail_count_{code}", 0)
+
         history = self.get_data("switch_history") or []
         record = {
             "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "old_label": old_label,
             "new_label": new_label,
             "reason": reason,
+            "type": trigger_type,
         }
         history.append(record)
-        # 最多保留 100 条
         if len(history) > 100:
             history = history[-100:]
         self.save_data("switch_history", history)
 
-        # 记录当前状态
         self.save_data("current_status", {
             "current_label": new_label,
             "last_switch_time": record["time"],
             "last_switch_reason": reason,
+            "last_switch_type": trigger_type,
         })
 
-        msg = f"API Key 已自动切换：{old_label} → {new_label}\n原因：{reason}"
-        logger.info(msg)
+        emoji = "🔄" if "主" in new_label else "⚠️"
+        msg = f"{emoji} {old_label} → {new_label}\n触发: {trigger_type}\n原因: {reason}"
+        logger.warning(msg)
 
         if self._notify:
             self.post_message(
-                title="API Key 自动切换",
+                title="🔑 API Key 已切换",
                 text=msg,
                 mtype=NotificationType.SiteMessage,
             )
@@ -260,12 +248,25 @@ class LLMApiKeyAutoSwitch(_PluginBase):
         """返回插件远程命令列表。"""
         return [
             {
-                "cmd": "/switch_api_key",
+                "cmd": "/sw-api",
                 "event": "switch_api_key",
-                "desc": "手动切换 API Key",
+                "desc": "手动切换到下一个备用 API Key",
                 "data": {},
-            }
+            },
         ]
+
+    @eventmanager.register(EventType.CommandExcute)
+    def handle_command(self, event: ManagerEvent = None) -> None:
+        """处理 /sw-api 命令。"""
+        if not self._enabled:
+            return
+        event_data = event.event_data
+        if not event_data:
+            return
+        command = event_data.get("cmd")
+        if command != "/sw-api":
+            return
+        self._do_switch("手动触发切换", trigger_type="手动")
 
     def get_api(self) -> List[Dict[str, Any]]:
         """返回插件 API 列表。"""
@@ -274,7 +275,7 @@ class LLMApiKeyAutoSwitch(_PluginBase):
                 "path": "/status",
                 "endpoint": self.api_status,
                 "methods": ["GET"],
-                "summary": "获取当前 Key 状态",
+                "summary": "获取当前 Key 状态和失败计数",
             },
             {
                 "path": "/history",
@@ -286,10 +287,26 @@ class LLMApiKeyAutoSwitch(_PluginBase):
 
     def api_status(self) -> Dict[str, Any]:
         """获取当前 Key 状态 API。"""
+        status = self.get_data("current_status") or {}
+        all_keys = self._get_all_keys()
+        key_list = []
+        for label, key in all_keys:
+            masked = key[:10] + "..." if len(key) > 15 else key
+            key_list.append({"label": label, "masked": masked})
+
         return {
             "current_label": self._get_current_key_label(),
-            "last_switch_time": (self.get_data("current_status") or {}).get("last_switch_time", "无"),
-            "last_switch_reason": (self.get_data("current_status") or {}).get("last_switch_reason", "无"),
+            "total_keys": len(all_keys),
+            "key_list": key_list,
+            "fail_401": self.get_data("fail_count_401") or 0,
+            "fail_402": self.get_data("fail_count_402") or 0,
+            "fail_429": self.get_data("fail_count_429") or 0,
+            "retry_401": self._retry_401,
+            "retry_402": self._retry_402,
+            "retry_429": self._retry_429,
+            "last_switch_time": status.get("last_switch_time", "无"),
+            "last_switch_reason": status.get("last_switch_reason", "无"),
+            "last_switch_type": status.get("last_switch_type", "-"),
         }
 
     def api_history(self) -> List[Dict[str, Any]]:
@@ -298,140 +315,259 @@ class LLMApiKeyAutoSwitch(_PluginBase):
 
     def get_form(self) -> Tuple[Optional[List[dict]], Dict[str, Any]]:
         """返回插件配置表单与默认配置。"""
-        return [
+        fields = [
             {
-                "component": "VForm",
+                "component": "VRow",
+                "props": {"class": "mb-2"},
                 "content": [
                     {
-                        "component": "VSwitch",
-                        "props": {
-                            "model": "enabled",
-                            "label": "启用插件",
-                        },
-                    },
-                    {
-                        "component": "VSwitch",
-                        "props": {
-                            "model": "notify",
-                            "label": "启用通知",
-                        },
-                    },
-                    {
-                        "component": "VTextField",
-                        "props": {
-                            "model": "primary_key",
-                            "label": "主 API Key",
-                            "placeholder": "sk-xxx...",
-                            "type": "password",
-                        },
-                    },
-                    {
-                        "component": "VTextField",
-                        "props": {
-                            "model": "backup_key",
-                            "label": "备用 API Key",
-                            "placeholder": "sk-xxx...",
-                            "type": "password",
-                        },
-                    },
-                    {
-                        "component": "VCronField",
-                        "props": {
-                            "model": "cron",
-                            "label": "检测周期 (Cron 表达式)",
-                            "placeholder": "默认每6小时",
-                        },
+                        "component": "VCol",
+                        "props": {"cols": 12},
+                        "content": [{"component": "VSwitch", "props": {"model": "enabled", "label": "启用插件"}}],
                     },
                 ],
-            }
-        ], {
+            },
+            {
+                "component": "VRow",
+                "props": {"class": "mb-2"},
+                "content": [
+                    {
+                        "component": "VCol",
+                        "props": {"cols": 12},
+                        "content": [{"component": "VSwitch", "props": {"model": "notify", "label": "切换时发送通知"}}],
+                    },
+                ],
+            },
+            {
+                "component": "VRow",
+                "props": {"class": "mb-2"},
+                "content": [
+                    {
+                        "component": "VCol",
+                        "props": {"cols": 12},
+                        "content": [{
+                            "component": "VTextField",
+                            "props": {
+                                "model": "primary_key",
+                                "label": "主 API Key",
+                                "placeholder": "sk-xxx...",
+                                "append-inner-icon": "mdi-content-paste",
+                                "onClick:append-inner": "event => { navigator.clipboard.readText().then(t => { model.primary_key = t; }).catch(e => {}); }",
+                            },
+                        }],
+                    },
+                ],
+            },
+            {
+                "component": "VRow",
+                "props": {"class": "mb-2"},
+                "content": [
+                    {
+                        "component": "VCol",
+                        "props": {"cols": 12},
+                        "content": [{
+                            "component": "VTextField",
+                            "props": {
+                                "model": "backup_count",
+                                "label": "备用 Key 数量",
+                                "placeholder": "1",
+                                "type": "number",
+                                "hint": "修改后保存重新打开配置页以显示对应数量的输入框",
+                                "persistent-hint": True,
+                            },
+                        }],
+                    },
+                ],
+            },
+        ]
+
+        # 动态生成备用 Key 输入框
+        count = self._backup_count
+        for i in range(1, count + 1):
+            model_key = f"backup_key_{i}"
+            fields.append({
+                "component": "VRow",
+                "props": {"class": "mb-2"},
+                "content": [
+                    {
+                        "component": "VCol",
+                        "props": {"cols": 12},
+                        "content": [{
+                            "component": "VTextField",
+                            "props": {
+                                "model": model_key,
+                                "label": f"备用 Key {i}",
+                                "placeholder": "sk-xxx...",
+                                "append-inner-icon": "mdi-content-paste",
+                                "onClick:append-inner": f"event => {{ navigator.clipboard.readText().then(t => {{ model.{model_key} = t; }}).catch(e => {{}}); }}",
+                            },
+                        }],
+                    },
+                ],
+            })
+
+        # 触发次数设置
+        fields.append({
+            "component": "VRow",
+            "props": {"class": "mb-2"},
+            "content": [
+                {
+                    "component": "VCol",
+                    "props": {"cols": 4},
+                    "content": [{"component": "VTextField", "props": {"model": "retry_401", "label": "401 触发次数", "placeholder": "3", "type": "number"}}],
+                },
+                {
+                    "component": "VCol",
+                    "props": {"cols": 4},
+                    "content": [{"component": "VTextField", "props": {"model": "retry_402", "label": "402 触发次数", "placeholder": "3", "type": "number"}}],
+                },
+                {
+                    "component": "VCol",
+                    "props": {"cols": 4},
+                    "content": [{"component": "VTextField", "props": {"model": "retry_429", "label": "429 触发次数", "placeholder": "3", "type": "number"}}],
+                },
+            ],
+        })
+
+        # 默认配置
+        defaults = {
             "enabled": False,
             "notify": True,
             "primary_key": "",
-            "backup_key": "",
-            "cron": "0 */6 * * *",
+            "backup_count": 1,
+            "retry_401": 3,
+            "retry_402": 3,
+            "retry_429": 3,
         }
+        for i in range(1, count + 1):
+            defaults[f"backup_key_{i}"] = ""
+
+        return [{"component": "VForm", "content": fields}], defaults
 
     def get_page(self) -> Optional[List[dict]]:
         """返回插件详情页面。"""
         if not self._enabled:
             return None
 
-        current_status = self.get_data("current_status") or {}
+        status = self.get_data("current_status") or {}
         history = self.get_data("switch_history") or []
-        last_records = history[-5:] if history else []
+        current_label = self._get_current_key_label()
+        all_keys = self._get_all_keys()
 
-        rows = []
-        # 当前状态卡片
-        rows.append({
-            "component": "VCard",
-            "content": [
-                {
+        f401 = self.get_data("fail_count_401") or 0
+        f402 = self.get_data("fail_count_402") or 0
+        f429 = self.get_data("fail_count_429") or 0
+        has_fail = f401 > 0 or f402 > 0 or f429 > 0
+
+        alert_type = "success"
+        if has_fail:
+            alert_type = "warning"
+        if "备用" in current_label and has_fail:
+            alert_type = "error"
+
+        # Key 列表展示
+        key_chips = []
+        for idx, (label, key) in enumerate(all_keys):
+            is_current = label == current_label
+            masked = key[:12] + "..." if len(key) > 16 else key
+            color = "primary" if idx == 0 else ("warning" if is_current else "default")
+            variant = "tonal" if not is_current else "flat"
+            key_chips.append({
+                "component": "VChip",
+                "props": {
+                    "color": color,
+                    "variant": variant,
+                    "size": "small",
+                    "class": "mr-1 mb-1",
+                    "label": True,
+                },
+                "content": f"{'👉' if is_current else ''} {label}",
+            })
+
+        fail_text = f"401: {f401}/{self._retry_401} | 402: {f402}/{self._retry_402} | 429: {f429}/{self._retry_429}"
+
+        rows = [
+            # Key 列表 + 状态
+            {
+                "component": "VCard",
+                "props": {"class": "mb-4"},
+                "content": [{
                     "component": "VCardText",
                     "props": {"class": "pa-4"},
                     "content": [
+                        {"component": "div", "props": {"class": "mb-2"}, "content": key_chips},
                         {
                             "component": "VAlert",
                             "props": {
-                                "type": "success" if current_status.get("current_label") else "info",
-                                "title": "当前使用",
-                                "text": f'当前: {current_status.get("current_label", "未检测")} | 上次切换: {current_status.get("last_switch_time", "无")}',
-                            },
-                        },
-                        {
-                            "component": "VAlert",
-                            "props": {
-                                "type": "info",
-                                "title": "上次切换原因",
-                                "text": current_status.get("last_switch_reason", "无"),
+                                "type": alert_type,
+                                "density": "compact",
+                                "variant": "tonal",
+                                "title": f"当前: {current_label}",
+                                "text": (
+                                    f"连续失败: {fail_text}\n"
+                                    f"上次切换: {status.get('last_switch_time', '无')} "
+                                    f"({status.get('last_switch_type', '-')}) | "
+                                    f"{status.get('last_switch_reason', '无')}"
+                                ),
                             },
                         },
                     ],
-                },
-            ],
-        })
-
-        # 切换历史表格
-        if last_records:
-            headers = [
-                {"title": "时间", "key": "time", "align": "start", "sortable": True},
-                {"title": "切换前", "key": "old_label"},
-                {"title": "切换后", "key": "new_label"},
-                {"title": "原因", "key": "reason"},
-            ]
-            rows.append({
-                "component": "VCard",
-                "content": [
-                    {
-                        "component": "VCardText",
-                        "props": {"class": "pa-0"},
-                        "content": [
-                            {
-                                "component": "VDataTable",
-                                "props": {
-                                    "headers": headers,
-                                    "items": last_records,
-                                    "items-per-page": -1,
-                                    "hide-default-footer": True,
-                                    "density": "compact",
-                                },
-                            },
-                        ],
-                    },
-                ],
-            })
-
-        return [
-            {
-                "component": "div",
-                "props": {"class": "pa-4"},
-                "content": rows,
+                }],
             },
         ]
 
+        # 切换历史列表
+        if history:
+            items = list(reversed(history[-10:]))
+
+            rows.append({
+                "component": "VRow",
+                "content": [{
+                    "component": "VCol",
+                    "props": {"cols": 12},
+                    "content": [{
+                        "component": "VCard",
+                        "props": {"variant": "outlined"},
+                        "content": [{
+                            "component": "VCardText",
+                            "props": {"class": "pa-4"},
+                            "content": [
+                                {
+                                    "component": "div",
+                                    "props": {"class": "text-h6 font-weight-bold mb-2"},
+                                    "text": f"切换历史（最近 {min(len(history), 10)} 条）",
+                                },
+                                {
+                                    "component": "VTable",
+                                    "props": {"hover": True, "density": "compact"},
+                                    "content": [
+                                        {"component": "thead", "content": [{"component": "tr", "content": [
+                                            {"component": "th", "props": {"class": "text-start"}, "text": "时间"},
+                                            {"component": "th", "props": {"class": "text-center"}, "text": "触发"},
+                                            {"component": "th", "props": {"class": "text-center"}, "text": "切换方向"},
+                                            {"component": "th", "props": {"class": "text-start"}, "text": "原因"},
+                                        ]}]},
+                                        {"component": "tbody", "content": [
+                                            {
+                                                "component": "tr",
+                                                "content": [
+                                                    {"component": "td", "text": r["time"]},
+                                                    {"component": "td", "props": {"class": "text-center"}, "text": r.get("type", "自动") if r.get("type") else ("手动" if "手动" in r.get("reason", "") else "自动")},
+                                                    {"component": "td", "props": {"class": "text-center"}, "text": f'{r["old_label"]} → {r["new_label"]}'},
+                                                    {"component": "td", "text": r["reason"]},
+                                                ]
+                                            } for r in items
+                                        ]}
+                                    ]
+                                }
+                            ]
+                        }]
+                    }]
+                }]
+            })
+
+        return [{"component": "div", "props": {"class": "pa-4"}, "content": rows}]
+
     def stop_service(self) -> None:
-        """停止插件后台服务并释放资源。"""
-        try:
-            self._scheduler.remove_job("api_key_check")
-        except Exception:
-            pass
+        """停止插件并恢复原始修补。"""
+        self._restore_build()
