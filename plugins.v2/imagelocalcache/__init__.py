@@ -29,10 +29,11 @@ class ImageLocalCache(_PluginBase):
         "自动替换所有 TMDB 图片 URL 为本地缓存地址，"
         "首次访问自动从 TMDB 下载缓存，后续直接返回本地文件。"
     )
-    plugin_icon = "image.png"
+    plugin_icon = "https://raw.githubusercontent.com/wenzhanquan/MoviePilot-Plugins/main/plugins.v2/imagelocalcache/icon.png"
     plugin_version = "1.0.0"
     plugin_label = "消息通知"
     plugin_author = "wenzhanquan"
+    author_url = "https://github.com/wenzhanquan"
     plugin_config_prefix = "imagelocalcache_"
     plugin_order = 100
     auth_level = 1
