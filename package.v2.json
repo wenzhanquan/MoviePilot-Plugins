@@ -51,7 +51,7 @@
     "name": "站点自动签到",
     "description": "自动模拟登录、签到站点。",
     "version": "2.9.2",
-    "icon": "https://raw.githubusercontent.com/wenzhanquan/MoviePilot-Plugins/main/plugins.v2/autosignin/signin.png",
+    "icon": "signin.svg",
     "labels": "站点工具",
     "author": "wenzhanquan",
     "author_url": "https://github.com/wenzhanquan",
