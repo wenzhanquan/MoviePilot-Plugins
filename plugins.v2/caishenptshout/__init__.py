@@ -20,10 +20,11 @@ class CaishenPTShout(_PluginBase):
 
     plugin_name = "财神PT喊话"
     plugin_desc = "定时在财神PT站点群聊区发送喊话消息。"
-    plugin_icon = "caishen.png"
+    plugin_icon = "https://raw.githubusercontent.com/wenzhanquan/MoviePilot-Plugins/main/plugins.v2/caishenptshout/caishen.png"
     plugin_version = "1.0.0"
     plugin_label = "站点工具"
     plugin_author = "wenzhanquan"
+    author_url = "https://github.com/wenzhanquan"
     plugin_config_prefix = "caishenptshout_"
     plugin_order = 99
     auth_level = 1
