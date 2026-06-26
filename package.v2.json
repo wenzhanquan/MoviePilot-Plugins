@@ -9,7 +9,7 @@
     "author_url": "https://github.com/wenzhanquan",
     "level": 1,
     "history": {
-      "v1.0.0": "版本重置为1.0.0，图标、author_url统一修复"
+      "v1.0.0": "版本重置，图标、author_url统一修复"
     }
   },
   "imagelocalcache": {
@@ -39,27 +39,40 @@
   "QlCookieCheck": {
     "name": "青龙Cookie检测",
     "description": "定时检测青龙面板中京东Cookie等环境变量是否过期",
-    "version": "1.0",
-    "icon": "https://raw.githubusercontent.com/wenzhanquan/MoviePilot-Plugins/main/plugins.v2/qlcookiecheck/icon.svg",
+    "version": "1.0.0",
+    "icon": "https://raw.githubusercontent.com/wenzhanquan/MoviePilot-Plugins/main/plugins.v2/qlcookiecheck/icon.png",
     "labels": "站点工具",
     "author": "wenzhanquan",
     "author_url": "https://github.com/wenzhanquan",
     "level": 1,
     "history": {
-      "v1.0": "初始版本"
+      "v1.0.0": "图标由SVG改为PNG，修复author_url"
     }
   },
   "MpPluginHealthCheck": {
     "name": "MP插件健康检测",
     "description": "定时检测已安装插件状态变化",
-    "version": "1.0",
-    "icon": "https://raw.githubusercontent.com/wenzhanquan/MoviePilot-Plugins/main/plugins.v2/mppluginhealthcheck/icon.svg",
+    "version": "1.0.0",
+    "icon": "https://raw.githubusercontent.com/wenzhanquan/MoviePilot-Plugins/main/plugins.v2/mppluginhealthcheck/icon.png",
     "labels": "系统工具",
     "author": "wenzhanquan",
     "author_url": "https://github.com/wenzhanquan",
     "level": 1,
     "history": {
-      "v1.0": "初始版本"
+      "v1.0.0": "图标由SVG改为PNG，修复author_url"
+    }
+  },
+  "LLMApiKeyAutoSwitch": {
+    "name": "API Key 自动切换",
+    "description": "检测 API Key 额度，耗尽时自动切换到备用 Key。",
+    "version": "1.0.0",
+    "icon": "https://raw.githubusercontent.com/wenzhanquan/MoviePilot-Plugins/main/plugins.v2/llmapikeyautoswitch/icon.png",
+    "labels": "系统工具",
+    "author": "wenzhanquan",
+    "author_url": "https://github.com/wenzhanquan",
+    "level": 1,
+    "history": {
+      "v1.0.0": "初始版本"
     }
   }
 }
