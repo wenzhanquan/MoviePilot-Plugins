@@ -16,7 +16,7 @@ class QlCookieCheck(_PluginBase):
     plugin_name = "青龙Cookie检测"
     plugin_desc = "定时检测青龙面板中京东Cookie等环境变量是否过期"
     plugin_icon = "https://raw.githubusercontent.com/wenzhanquan/MoviePilot-Plugins/main/plugins.v2/qlcookiecheck/icon.png"
-    plugin_version = "1.0"
+    plugin_version = "1.0.0"
     plugin_author = "wenzhanquan"
     author_url = "https://github.com/wenzhanquan"
     plugin_order = 30
