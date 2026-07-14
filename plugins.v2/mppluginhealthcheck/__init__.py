@@ -338,32 +338,37 @@ class MpPluginHealthCheck(_PluginBase):
         try:
             from app.core.plugin import PluginManager
             from app.db.systemconfig_oper import SystemConfigOper
+            from app.schemas.types import SystemConfigKey
             pm = PluginManager()
             running_plugins = pm.running_plugins
             all_plugins = pm.plugins
             config_oper = SystemConfigOper()
+            # 获取真正已安装的插件 ID 列表，排除未安装的市场插件
+            installed_ids = config_oper.get(SystemConfigKey.UserInstalledPlugins) or []
             result = []
-            all_ids = set(list(running_plugins.keys()) + list(all_plugins.keys()))
-            for plugin_id in all_ids:
-                instance = running_plugins.get(plugin_id)
+            for plugin_id, instance in running_plugins.items():
+                # 跳过未真正安装的插件（如市场下载但未安装的）
+                if plugin_id not in installed_ids:
+                    continue
                 cls = all_plugins.get(plugin_id)
                 plugin_cls = instance or cls
                 # 优先从数据库中读取已保存的配置来判断启用状态
-                # 避免插件重载时序导致 running_plugins 中状态不准确
                 saved_config = config_oper.get(f"plugin.{plugin_id}")
                 if saved_config:
                     enabled = bool(saved_config.get("enabled", False))
-                elif instance and hasattr(instance, "get_state"):
+                elif hasattr(instance, "get_state"):
                     enabled = instance.get_state()
                 else:
                     enabled = False
+                if not enabled:
+                    continue
                 result.append({
                     "id": plugin_id,
                     "name": getattr(plugin_cls, "plugin_name", plugin_id),
                     "version": getattr(plugin_cls, "plugin_version", ""),
                     "state": enabled
                 })
-            logger.info(f"获取到 {len(result)} 个插件")
+            logger.info(f"获取到 {len(result)} 个启用的插件")
             return result
         except Exception as e:
             logger.error(f"获取插件列表失败: {str(e)}")
@@ -467,7 +472,8 @@ class MpPluginHealthCheck(_PluginBase):
                 info.append(f"🟢 新增: {p['name']} v{p.get('version', '?')}")
                 logger.info(f"  插件新增: {p['name']} v{p.get('version', '?')}")
                 new_names.append(f"{p['name']} v{p.get('version', '?')}")
-        self.__save_snapshot(current)
+        # 固定基准模式：不自动更新快照，保持与初始基准对比
+        # self.__save_snapshot(current)
         now_ts = datetime.now()
         run_time = now_ts.strftime("%H:%M:%S")
         day_key = f"{now_ts.month}月{now_ts.day}日 {now_ts.hour:02d}:{now_ts.minute:02d}"
