@@ -355,7 +355,13 @@ class MpPluginHealthCheck(_PluginBase):
                 # 优先从数据库中读取已保存的配置来判断启用状态
                 saved_config = config_oper.get(f"plugin.{plugin_id}")
                 if saved_config:
-                    enabled = bool(saved_config.get("enabled", False))
+                    enabled_setting = saved_config.get("enabled")
+                    if enabled_setting is not None:
+                        enabled = bool(enabled_setting)
+                    elif hasattr(instance, "get_state"):
+                        enabled = instance.get_state()
+                    else:
+                        enabled = False
                 elif hasattr(instance, "get_state"):
                     enabled = instance.get_state()
                 else:
