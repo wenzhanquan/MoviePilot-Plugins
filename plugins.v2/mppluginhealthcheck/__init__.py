@@ -494,8 +494,8 @@ class MpPluginHealthCheck(_PluginBase):
                 "timestamp": timestamp
             })
             return
-        baseline_map = {p["id"]: p for p in baseline}
-        current_map = {p["id"]: p for p in current}
+        baseline_map = {p["id"].lower(): p for p in baseline}
+        current_map = {p["id"].lower(): p for p in current}
         changes = []
         lost_names = []
         stopped_names = []
@@ -509,7 +509,7 @@ class MpPluginHealthCheck(_PluginBase):
                 changes.append(f"丢失: {p['name']} ({pid})")
                 logger.warning(f"  插件丢失: {p['name']} ({pid})")
                 lost_names.append(p['name'])
-                lost_plugin_ids.append(pid)
+                lost_plugin_ids.append(p["id"])
             else:
                 cp = current_map[pid]
                 if p.get("state") and not cp.get("state"):
@@ -534,6 +534,16 @@ class MpPluginHealthCheck(_PluginBase):
                 logger.info(f"  插件新增: {p['name']} v{p.get('version', '?')}")
                 new_names.append(f"{p['name']} v{p.get('version', '?')}")
 
+        # 升级后更新快照版本号，保持插件数量不变
+        if upgraded_names:
+            for item in baseline:
+                pid = item["id"]
+                if pid in current_map:
+                    nv = current_map[pid].get("version", "")
+                    if item.get("version", "") != nv:
+                        item["version"] = nv
+            self.__save_snapshot(baseline)
+
         # 自动安装丢失的插件
         if lost_plugin_ids and self._auto_install:
             logger.info(f"MP插件健康检测: 自动安装 {len(lost_plugin_ids)} 个丢失的插件...")
@@ -555,7 +565,8 @@ class MpPluginHealthCheck(_PluginBase):
         # 安装后重新获取插件列表，更新对比结果
         if auto_installed:
             current = self.__get_plugin_list()
-            current_map = {p["id"]: p for p in current}
+            current_map = {p["id"].lower(): p for p in current}
+            auto_failed_set = set(a.lower() for a in auto_failed)
             # 重新计算变更
             changes = []
             lost_names = []
@@ -565,16 +576,16 @@ class MpPluginHealthCheck(_PluginBase):
             new_names = []
             for pid, p in baseline_map.items():
                 if pid not in current_map:
-                    if pid not in auto_failed:
-                        changes.append("丢失: %s (%s)" % (p['name'], pid))
+                    if p["id"].lower() not in auto_failed_set:
+                        changes.append("丢失: %s (%s)" % (p['name'], p['id']))
                         lost_names.append(p['name'])
                 else:
                     cp = current_map[pid]
                     if p.get("state") and not cp.get("state"):
-                        changes.append("停用: %s (%s)" % (cp['name'], pid))
+                        changes.append("停用: %s (%s)" % (cp['name'], p['id']))
                         stopped_names.append(cp['name'])
                     elif not p.get("state") and cp.get("state"):
-                        changes.append("启用: %s (%s)" % (cp['name'], pid))
+                        changes.append("启用: %s (%s)" % (cp['name'], p['id']))
                         started_names.append(cp['name'])
             for pid, p in current_map.items():
                 if pid in baseline_map:
@@ -612,7 +623,7 @@ class MpPluginHealthCheck(_PluginBase):
                 if auto_installed:
                     msg_parts.append("📥 自动安装结果:")
                     for pid in auto_installed:
-                        name = baseline_map.get(pid, {}).get("name", pid)
+                        name = baseline_map.get(pid.lower(), {}).get("name", pid)
                         msg_parts.append("  ✅ %s - 已完成" % name)
                 msg_parts.append("⏰ 时间: %s" % now_str)
                 self.post_message(
@@ -637,7 +648,7 @@ class MpPluginHealthCheck(_PluginBase):
             if lost_plugin_ids:
                 lost_detail = []
                 for pid in lost_plugin_ids:
-                    name = baseline_map.get(pid, {}).get("name", pid)
+                    name = baseline_map.get(pid.lower(), {}).get("name", pid)
                     if pid in auto_installed:
                         lost_detail.append("  ✅ %s - 已自动安装" % name)
                     elif pid in auto_failed:
@@ -674,24 +685,27 @@ class MpPluginHealthCheck(_PluginBase):
             )
 
     def _get_online_plugins_map(self) -> Dict[str, Any]:
-        """获取市场插件 ID 到插件信息的映射。"""
+        """获取市场插件和本地插件 ID 到插件信息的映射，key 统一小写。"""
         try:
             from app.core.plugin import PluginManager
             pm = PluginManager()
-            online_plugins = pm.get_online_plugins()
             result = {}
-            for p in online_plugins:
-                result[p.id] = p
-            logger.info(f"获取到 {len(result)} 个市场插件")
+            # 从线上市场获取
+            for p in pm.get_online_plugins():
+                result[p.id.lower()] = p
+            # 合并本地仓库插件
+            for p in pm.get_local_repo_plugins():
+                result[p.id.lower()] = p
+            logger.info(f"获取到 {len(result)} 个可安装插件")
             return result
         except Exception as e:
-            logger.error(f"获取市场插件列表失败: {str(e)}")
+            logger.error(f"获取可安装插件列表失败: {str(e)}")
             return {}
 
     def _install_lost_plugin(self, plugin_id: str, online_map: Dict[str, Any]) -> bool:
         """安装单个丢失的插件。"""
         try:
-            plugin_info = online_map.get(plugin_id)
+            plugin_info = online_map.get(plugin_id.lower())
             if not plugin_info:
                 logger.warning(f"  插件 {plugin_id} 未在市场找到，跳过安装")
                 return False
