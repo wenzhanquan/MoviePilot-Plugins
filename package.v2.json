@@ -12,16 +12,6 @@
       "v1.0.0": "版本重置，图标、author_url统一修复"
     }
   },
-  "imagelocalcache": {
-    "name": "本地图片缓存代理",
-    "description": "将 TMDB 图片缓存到本地，通过插件 API 提供快速访问。自动替换所有 TMDB 图片 URL 为本地缓存地址，首次访问自动从 TMDB 下载缓存，后续直接返回本地文件。",
-    "version": "1.0.0",
-    "icon": "https://raw.githubusercontent.com/wenzhanquan/MoviePilot-Plugins/main/plugins.v2/imagelocalcache/icon.png",
-    "labels": "消息通知",
-    "author": "wenzhanquan",
-    "author_url": "https://github.com/wenzhanquan",
-    "release": false
-  },
   "CaishenPTShout": {
     "name": "财神PT喊话",
     "description": "定时在财神PT站点群聊区发送喊话消息，如「财神，求上传」等。自动读取站点Cookie，支持自定义喊话内容和定时间隔。",
@@ -34,33 +24,6 @@
     "system_version": ">=2.12.0",
     "history": {
       "v1.0.0": "初始版本"
-    }
-  },
-  "QlCookieCheck": {
-    "name": "青龙Cookie检测",
-    "description": "定时检测青龙面板中京东Cookie等环境变量是否过期",
-    "version": "1.0.0",
-    "icon": "https://raw.githubusercontent.com/wenzhanquan/MoviePilot-Plugins/main/plugins.v2/qlcookiecheck/icon.png",
-    "labels": "站点工具",
-    "author": "wenzhanquan",
-    "author_url": "https://github.com/wenzhanquan",
-    "level": 1,
-    "history": {
-      "v1.0.0": "图标由SVG改为PNG，修复author_url"
-    }
-  },
-  "MpPluginHealthCheck": {
-    "name": "MP插件健康检测",
-    "description": "定时检测已安装插件状态变化",
-    "version": "1.0.1",
-    "icon": "https://raw.githubusercontent.com/wenzhanquan/MoviePilot-Plugins/main/plugins.v2/mppluginhealthcheck/icon.png",
-    "labels": "系统工具",
-    "author": "wenzhanquan",
-    "author_url": "https://github.com/wenzhanquan",
-    "level": 1,
-    "history": {
-      "v1.0.0": "图标由SVG改为PNG，修复author_url",
-      "v1.0.1": "新增更新快照按钮和API"
     }
   },
   "LLMApiKeyAutoSwitch": {
@@ -88,5 +51,42 @@
     "history": {
       "v1.0.0": "基于 MediaServerMsgMod 魔改版，图片 URL 走本地缓存代理"
     }
+  },
+  "MpPluginHealthCheck": {
+    "name": "MP插件健康检测",
+    "description": "定时检测已安装插件状态变化",
+    "version": "1.0.1",
+    "icon": "https://raw.githubusercontent.com/wenzhanquan/MoviePilot-Plugins/main/plugins.v2/mppluginhealthcheck/icon.png",
+    "labels": "系统工具",
+    "author": "wenzhanquan",
+    "author_url": "https://github.com/wenzhanquan",
+    "level": 1,
+    "history": {
+      "v1.0.0": "图标由SVG改为PNG，修复author_url",
+      "v1.0.1": "新增更新快照按钮和API"
+    }
+  },
+  "QlCookieCheck": {
+    "name": "青龙Cookie检测",
+    "description": "定时检测青龙面板中京东Cookie等环境变量是否过期",
+    "version": "1.0.0",
+    "icon": "https://raw.githubusercontent.com/wenzhanquan/MoviePilot-Plugins/main/plugins.v2/qlcookiecheck/icon.png",
+    "labels": "站点工具",
+    "author": "wenzhanquan",
+    "author_url": "https://github.com/wenzhanquan",
+    "level": 1,
+    "history": {
+      "v1.0.0": "图标由SVG改为PNG，修复author_url"
+    }
+  },
+  "imagelocalcache": {
+    "name": "本地图片缓存代理",
+    "description": "将 TMDB 图片缓存到本地，通过插件 API 提供快速访问。自动替换所有 TMDB 图片 URL 为本地缓存地址，首次访问自动从 TMDB 下载缓存，后续直接返回本地文件。",
+    "version": "1.0.0",
+    "icon": "https://raw.githubusercontent.com/wenzhanquan/MoviePilot-Plugins/main/plugins.v2/imagelocalcache/icon.png",
+    "labels": "消息通知",
+    "author": "wenzhanquan",
+    "author_url": "https://github.com/wenzhanquan",
+    "release": false
   }
 }
