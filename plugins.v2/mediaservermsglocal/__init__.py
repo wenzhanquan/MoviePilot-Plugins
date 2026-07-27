@@ -40,7 +40,7 @@ class MediaServerMsgLocal(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wenzhanquan/MoviePilot-Plugins/main/plugins.v2/mediaservermsglocal/icon.png"
     # 插件版本
-    plugin_version = "1.0.0"
+    plugin_version = "1.0.1"
     # 插件作者
     plugin_author = "wenzhanquan"
     # 作者主页
@@ -587,6 +587,15 @@ class MediaServerMsgLocal(_PluginBase):
                         image_url = specific_image
                 except Exception as e:
                     logger.debug(f"获取剧集图片时出错: {str(e)}")
+
+            # 将图片 URL 通过本地缓存代理
+            if image_url:
+                try:
+                    original_url = image_url
+                    image_url = f"{settings.APP_DOMAIN.rstrip('/')}/api/v1/plugin/ImageLocalCache/img?url={quote(original_url, safe='')}"
+                    logger.debug(f"非聚合消息图片已走本地缓存代理: {image_url}")
+                except Exception as e:
+                    logger.debug(f"图片本地缓存代理处理失败: {str(e)}")
 
             # 使用默认图片
             if not image_url:
