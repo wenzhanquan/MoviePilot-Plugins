@@ -75,5 +75,18 @@
     "history": {
       "v1.0.0": "初始版本"
     }
+  },
+  "MediaServerMsgLocal": {
+    "name": "媒体服务器通知本地版",
+    "description": "发送Emby/Jellyfin/Plex服务器的播放、入库等通知消息。图片已走本地缓存代理。",
+    "version": "1.0.0",
+    "icon": "https://raw.githubusercontent.com/wenzhanquan/MoviePilot-Plugins/main/plugins.v2/mediaservermsglocal/icon.png",
+    "labels": "消息通知",
+    "author": "wenzhanquan",
+    "author_url": "https://github.com/wenzhanquan",
+    "level": 1,
+    "history": {
+      "v1.0.0": "基于 MediaServerMsgMod 魔改版，图片 URL 走本地缓存代理"
+    }
   }
 }
