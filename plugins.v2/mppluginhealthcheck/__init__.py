@@ -19,7 +19,7 @@ class MpPluginHealthCheck(_PluginBase):
     plugin_name = "MP插件健康检测"
     plugin_desc = "定时检测已安装插件状态变化"
     plugin_icon = "https://raw.githubusercontent.com/wenzhanquan/MoviePilot-Plugins/main/plugins.v2/mppluginhealthcheck/icon.png"
-    plugin_version = "1.0.0"
+    plugin_version = "1.0.1"
     plugin_author = "wenzhanquan"
     author_url = "https://github.com/wenzhanquan"
     plugin_order = 31
@@ -70,7 +70,22 @@ class MpPluginHealthCheck(_PluginBase):
         }]
 
     def get_api(self) -> List[Dict[str, Any]]:
-        return []
+        return [
+            {
+                "path": "/update_snapshot",
+                "endpoint": self._api_update_snapshot,
+                "methods": ["GET"],
+                "summary": "更新插件快照，以当前已安装插件列表为基准",
+            }
+        ]
+
+    def _api_update_snapshot(self) -> dict:
+        """API 处理：更新插件快照，以当前已安装插件列表为基准。"""
+        current = self.__get_plugin_list()
+        self.__save_snapshot(current)
+        msg = f"快照已更新，共 {len(current)} 个插件"
+        logger.info(f"MP插件健康检测: {msg}")
+        return {"success": True, "message": msg}
 
     def get_service(self) -> List[Dict[str, Any]]:
         if not self._enabled or not self._cron:
@@ -157,6 +172,33 @@ class MpPluginHealthCheck(_PluginBase):
                                             "model": "cron",
                                             "label": "执行周期",
                                             "placeholder": "10 9 * * *"
+                                        }
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        "component": "VRow",
+                        "content": [
+                            {
+                                "component": "VCol",
+                                "props": {"cols": 12, "md": 6},
+                                "content": [
+                                    {
+                                        "component": "VBtn",
+                                        "props": {
+                                            "color": "primary",
+                                            "variant": "outlined",
+                                            "block": True,
+                                            "prepend-icon": "mdi-camera"
+                                        },
+                                        "text": "更新当前快照",
+                                        "events": {
+                                            "click": {
+                                                "api": "plugin/MpPluginHealthCheck/update_snapshot?apikey=",
+                                                "method": "get"
+                                            }
                                         }
                                     }
                                 ]
