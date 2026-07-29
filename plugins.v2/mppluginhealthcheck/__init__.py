@@ -580,8 +580,9 @@ class MpPluginHealthCheck(_PluginBase):
         if upgraded_names:
             for item in baseline:
                 pid = item["id"]
-                if pid in current_map:
-                    nv = current_map[pid].get("version", "")
+                pid_lower = pid.lower()
+                if pid_lower in current_map:
+                    nv = current_map[pid_lower].get("version", "")
                     if item.get("version", "") != nv:
                         item["version"] = nv
             self.__save_snapshot(baseline)
