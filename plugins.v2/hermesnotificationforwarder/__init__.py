@@ -10,12 +10,12 @@ class HermesNotificationForwarder(_PluginBase):
     plugin_name = "Hermes通知转发"
     plugin_desc = "接收Hermes推送的消息，通过MP通知渠道（企微/微信）发送给管理员"
     plugin_icon = "https://raw.githubusercontent.com/wenzhanquan/MoviePilot-Plugins/main/plugins.v2/hermesnotificationforwarder/icon.png"
-    plugin_version = "2.1"
+    plugin_version = "2.2"
     plugin_author = "wenzhanquan"
     plugin_order = 20
     auth_level = 1
 
-    _enabled: bool = False
+    _enabled: bool = True
     _notify: bool = True
     _onlyonce: bool = False
     _api_key: str = ""
@@ -24,7 +24,7 @@ class HermesNotificationForwarder(_PluginBase):
     def init_plugin(self, config: dict = None):
         self.stop_service()
         if config:
-            self._enabled = config.get("enabled", False)
+            self._enabled = config.get("enabled", True)
             self._notify = config.get("notify", True)
             self._onlyonce = config.get("onlyonce", False)
             self._api_key = config.get("api_key", "")
