@@ -100,6 +100,7 @@
     "author_url": "https://github.com/wenzhanquan",
     "level": 1,
     "history": {
+      "v2.2": "默认状态改为开启",
       "v2.1": "接收Hermes推送的消息，通过MP通知渠道发送给管理员"
     }
   }
