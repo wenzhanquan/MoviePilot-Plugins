@@ -507,7 +507,16 @@ class MediaServerMsgLocal(_PluginBase):
             message_title = ""
             event_action = self._webhook_actions.get(event_type, event_type)
             if item_type in ["TV", "SHOW"]:
-                message_title = f"{event_action}剧集 {item_name}"
+                season_id_t = getattr(event_info, 'season_id', None)
+                episode_id_t = getattr(event_info, 'episode_id', None)
+                if season_id_t is not None and episode_id_t is not None:
+                    try:
+                        episode_tag = f" S{int(season_id_t):02d}E{int(episode_id_t):02d}"
+                    except (ValueError, TypeError):
+                        episode_tag = ""
+                else:
+                    episode_tag = ""
+                message_title = f"{event_action}剧集 {item_name}{episode_tag}"
             elif item_type == "MOV":
                 message_title = f"{event_action}电影 {item_name}"
             elif item_type == "AUD":
@@ -548,6 +557,16 @@ class MediaServerMsgLocal(_PluginBase):
             overview = getattr(event_info, 'overview', None)
             if overview:
                 message_texts.append(f"剧情：{overview}")
+
+            # 添加季集信息
+            if item_type in ["TV", "SHOW"]:
+                season_id_b = getattr(event_info, 'season_id', None)
+                episode_id_b = getattr(event_info, 'episode_id', None)
+                if season_id_b is not None and episode_id_b is not None:
+                    try:
+                        message_texts.append(f"📺 季集：S{int(season_id_b):02d}E{int(episode_id_b):02d}")
+                    except (ValueError, TypeError):
+                        pass
 
             message_texts.append(f"时间：{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))}")
 
