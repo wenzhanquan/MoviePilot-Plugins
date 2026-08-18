@@ -18,9 +18,7 @@ from app.utils.web import WebUtils
 
 class MediaServerMsgLocal(_PluginBase):
     """
-    媒体服务器通知本地版
-
-    基于 MediaServerMsgMod 魔改版修改，图片 URL 走本地缓存代理。
+    媒体服务器通知插件魔改版
 
     功能：
     1. 监听Emby/Jellyfin/Plex等媒体服务器的Webhook事件
@@ -40,7 +38,7 @@ class MediaServerMsgLocal(_PluginBase):
     # 插件图标
     plugin_icon = "https://raw.githubusercontent.com/wenzhanquan/MoviePilot-Plugins/main/plugins.v2/mediaservermsglocal/icon.png"
     # 插件版本
-    plugin_version = "1.0.1"
+    plugin_version = "1.0.2"
     # 插件作者
     plugin_author = "wenzhanquan"
     # 作者主页
