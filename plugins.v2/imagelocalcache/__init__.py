@@ -1,5 +1,8 @@
 import os
 import re
+import uuid
+import time
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -27,10 +30,10 @@ class ImageLocalCache(_PluginBase):
     plugin_desc = (
         "将 TMDB 图片缓存到本地，通过插件 API 提供快速访问。"
         "自动替换所有 TMDB 图片 URL 为本地缓存地址，"
-        "首次访问自动从 TMDB 下载缓存，后续直接返回本地文件。"
+        "内置周期性自动清空任务与动态追踪，防止硬盘被无限占用。"
     )
     plugin_icon = "https://raw.githubusercontent.com/wenzhanquan/MoviePilot-Plugins/main/plugins.v2/imagelocalcache/icon.png"
-    plugin_version = "1.0.0"
+    plugin_version = "1.1.5"
     plugin_label = "消息通知"
     plugin_author = "wenzhanquan"
     author_url = "https://github.com/wenzhanquan"
@@ -45,138 +48,107 @@ class ImageLocalCache(_PluginBase):
     _original_tmdb_domain: str = ""
     _original_tmdb_scheme: str = ""
     _proxy_base_url: str = ""
-    # 保存原始 get_message_image 方法引用
-    _original_get_message_image = None
-    _original_get_poster_image = None
-    _original_get_backdrop_image = None
+    _auto_clear_schedule: str = "monthly"
+    
+    # 内存追踪字典：用于在搜索阶段将图片文件名映射回电影名称，实现明细追踪
+    _filename_to_title: Dict[str, str] = {}
 
     def init_plugin(self, config: dict = None) -> None:
-        """
-        根据插件配置初始化运行状态。
-
-        启动时保存当前 TMDB_IMAGE_DOMAIN，然后替换为本地缓存代理地址，
-        使所有 TMDB 图片 URL 指向插件 API。
-
-        :param config: 插件配置字典
-        """
-        self.stop_service()
-
-        # 初始化状态
-        self._enabled = False
-        self._external_domain = ""
-        self._original_tmdb_domain = ""
-        self._proxy_base_url = ""
-
+        """根据插件配置初始化运行状态。"""
         if not config:
-            return
+            config = {}
 
         self._enabled = bool(config.get("enabled", False))
-        self._external_domain = str(config.get("external_domain") or "").rstrip("/")
-
-        if not self._enabled or not self._external_domain:
-            logger.warning("本地图片缓存代理插件已启用，但外网域名未配置")
+        
+        if not self._enabled:
+            self.stop_service()
             return
 
-        # 设置缓存目录（在 MoviePilot 配置目录下）
+        domain = str(config.get("external_domain") or "").rstrip("/")
+        if not domain:
+            domain = str(settings.APP_DOMAIN or "").rstrip("/")
+
+        if not domain:
+            logger.warning("图片缓存代理插件已启用，但插件未配置外网域名，且系统也未配置 APP_DOMAIN，无法代理！")
+            self.stop_service()
+            return
+
+        self._external_domain = domain
+        self._auto_clear_schedule = config.get("auto_clear_schedule", "monthly")
+
         self._cache_dir = str(
             Path(settings.CONFIG_DIR) / "plugin_cache" / "imagelocalcache"
         )
         os.makedirs(self._cache_dir, exist_ok=True)
 
-        # 保存原始 TMDB_IMAGE_DOMAIN 作为回源地址
-        self._original_tmdb_domain = settings.TMDB_IMAGE_DOMAIN
-        self._original_tmdb_scheme = "https://"
-        logger.info(f"原始 TMDB 图片域名: {self._original_tmdb_domain}")
+        tmdb_domain = (settings.TMDB_IMAGE_DOMAIN or "image.tmdb.org").rstrip("/")
+        if tmdb_domain.startswith("http://") or tmdb_domain.startswith("https://"):
+            self._original_tmdb_domain = tmdb_domain
+            self._original_tmdb_scheme = ""
+        else:
+            self._original_tmdb_domain = tmdb_domain
+            self._original_tmdb_scheme = "https://"
+            
+        logger.info(f"原始 TMDB 图片回源基址: {self._original_tmdb_scheme}{self._original_tmdb_domain}")
 
-        # 构造本地缓存代理的基础 URL
-        # 使用单级路径 /img?url= 避免 nginx 多级路径代理问题
         self._proxy_base_url = (
             f"{self._external_domain}/api/v1/plugin/ImageLocalCache/img?url="
         )
 
-        # 更新模块级 proxy_base，使模块级 patch 生效
         global _module_proxy_base
         _module_proxy_base = self._proxy_base_url
 
-        logger.info(f"本地图片缓存代理插件初始化完成，代理基础 URL: {self._proxy_base_url}")
+        # 启动后台守护线程进行周期检查
+        self._stop_event = threading.Event()
+        threading.Thread(target=self._scheduler_loop, daemon=True).start()
 
-    def _patch_get_message_image(self):
-        """
-        替换 MediaInfo.get_message_image 方法。
-
-        将所有 TMDB 图片 URL 替换为本地缓存代理 URL，
-        使通知中的图片直接从本地缓存加载。
-        """
-        if self._original_get_message_image is None:
-            self._original_get_message_image = MediaInfo.get_message_image
-
-        proxy_base = self._proxy_base_url
-
-        def patched_get_message_image(self_obj, default=None):
-            """
-            替换后的 get_message_image 方法。
-
-            调用原始方法获取 TMDB 图片 URL，然后替换为本地代理地址。
-            """
-            url = self._original_get_message_image(self_obj, default)
-            if url:
-                return f"{proxy_base}{quote(url, safe='')}"
-            return url
-
-        MediaInfo.get_message_image = patched_get_message_image
-        logger.debug("已替换 MediaInfo.get_message_image 方法")
-
-    def _unpatch_get_message_image(self):
-        """
-        恢复 MediaInfo.get_message_image 方法。
-        """
-        if self._original_get_message_image is not None:
-            MediaInfo.get_message_image = self._original_get_message_image
-            self._original_get_message_image = None
-            logger.debug("已恢复 MediaInfo.get_message_image 方法")
+        logger.info(f"本地图片缓存代理插件初始化完成，代理 URL: {self._proxy_base_url}，清理策略: {self._auto_clear_schedule}")
 
     def get_state(self) -> bool:
-        """
-        获取插件启用状态。
-
-        :return: 插件是否启用
-        """
         return self._enabled
 
     @staticmethod
     def get_command() -> List[Dict[str, Any]]:
-        """
-        返回插件远程命令列表。
+        # 在 MP 插件卡片的右上角“执行命令”处展示
+        return [{
+            "cmd": "clear_all_cache",
+            "desc": "一键物理清空所有图片缓存",
+            "icon": "mdi-delete-sweep"
+        }]
 
-        :return: 命令列表（当前插件无命令）
-        """
-        return []
+    def execute(self, in_cmd: str, in_data: dict = None) -> Tuple[bool, str]:
+        if in_cmd == "clear_all_cache":
+            if not self._cache_dir or not os.path.exists(self._cache_dir):
+                return False, "缓存目录不存在，无需清理。"
+            try:
+                count = 0
+                for root, dirs, files in os.walk(self._cache_dir):
+                    for name in files:
+                        try:
+                            os.remove(os.path.join(root, name))
+                            count += 1
+                        except Exception:
+                            pass
+                logger.info(f"图片物理缓存清空完成，共清理 {count} 个文件。")
+                return True, f"成功清空 {count} 张图片缓存！"
+            except Exception as e:
+                logger.error(f"清理图片缓存异常：{e}")
+                return False, f"清理失败：{str(e)}"
+        return False, "未知命令"
 
     def get_api(self) -> List[Dict[str, Any]]:
-        """
-        返回插件 API 列表。
-
-        注册一个匿名可访问的图片缓存代理端点。
-
-        :return: API 路由配置列表
-        """
         return [
             {
                 "path": "/img",
                 "endpoint": self.serve_image,
                 "methods": ["GET"],
                 "summary": "TMDB 图片缓存代理",
-                "description": "代理并缓存 TMDB 图片。首次请求从 TMDB 下载并缓存到本地，后续直接返回缓存文件。",
+                "description": "代理并缓存 TMDB 图片。首次请求从 TMDB 下载缓存到本地，后续直接返回本地文件。",
                 "allow_anonymous": True,
             }
         ]
 
     def get_form(self) -> Tuple[Optional[List[dict]], Dict[str, Any]]:
-        """
-        返回插件配置表单与默认配置。
-
-        :return: (表单组件列表, 默认配置字典)
-        """
         return [
             {
                 "component": "VForm",
@@ -195,7 +167,7 @@ class ImageLocalCache(_PluginBase):
                                             "variant": "tonal",
                                             "title": "使用说明",
                                             "text": "启用后会自动将 TMDB 图片 URL 替换为本地缓存地址。"
-                                                    "企业微信等外部渠道访问图片时直接从本地返回，无需远程加载。"
+                                                    "企业微信等外部渠道访问图片时直接从本地返回，彻底解决加载慢问题。"
                                         }
                                     }
                                 ]
@@ -207,52 +179,49 @@ class ImageLocalCache(_PluginBase):
                         "content": [
                             {
                                 "component": "VCol",
-                                "props": {"cols": 6},
+                                "props": {"cols": 12, "md": 4},
                                 "content": [
                                     {
                                         "component": "VSwitch",
                                         "props": {
                                             "model": "enabled",
                                             "label": "启用图片缓存代理",
-                                            "color": "primary",
-                                            "hint": "开启后将拦截所有入库通知图片并替换为本地地址"
+                                            "color": "primary"
                                         }
                                     }
                                 ]
                             },
                             {
                                 "component": "VCol",
-                                "props": {"cols": 6},
+                                "props": {"cols": 12, "md": 4},
                                 "content": [
                                     {
                                         "component": "VTextField",
                                         "props": {
                                             "model": "external_domain",
                                             "label": "外网可访问域名",
-                                            "placeholder": "http://frp4.ccszxc.xin:56362",
-                                            "hint": "企业微信等外部服务能访问到的 MoviePilot 完整地址（含协议和端口）",
-                                            "persistentHint": True,
+                                            "placeholder": "若留空则自动读取系统 APP_DOMAIN",
                                             "clearable": True
                                         }
                                     }
                                 ]
-                            }
-                        ]
-                    },
-                    {
-                        "component": "VRow",
-                        "content": [
+                            },
                             {
                                 "component": "VCol",
-                                "props": {"cols": 12},
+                                "props": {"cols": 12, "md": 4},
                                 "content": [
                                     {
-                                        "component": "VAlert",
+                                        "component": "VSelect",
                                         "props": {
-                                            "type": "info",
-                                            "variant": "outlined",
-                                            "text": "插件通过替换 get_message_image() 返回的图片 URL 为本地缓存地址来工作，"
-                                                    "不影响原始 MediaInfo 数据和 WebUI 图片显示。"
+                                            "model": "auto_clear_schedule",
+                                            "label": "自动清空周期",
+                                            "items": [
+                                                {"title": "每月1号自动清空 (默认)", "value": "monthly"},
+                                                {"title": "每周一自动清空", "value": "weekly"},
+                                                {"title": "每日自动清空", "value": "daily"},
+                                                {"title": "从不自动清空", "value": "never"}
+                                            ],
+                                            "hint": "定期自动清空硬盘中的图片缓存，释放空间"
                                         }
                                     }
                                 ]
@@ -264,18 +233,15 @@ class ImageLocalCache(_PluginBase):
         ], {
             "enabled": False,
             "external_domain": "",
+            "auto_clear_schedule": "monthly"
         }
 
     def get_page(self) -> Optional[List[dict]]:
-        """
-        返回插件详情页面，展示运行状态和最近缓存记录。
-        """
         if not self._enabled:
             return self._build_disabled_page()
 
         cache_size = self._get_cache_size()
         cache_count = self._get_cache_count()
-        source_domain = self._original_tmdb_domain or settings.TMDB_IMAGE_DOMAIN
         history = self.get_data("_history") or []
         if not isinstance(history, list):
             history = []
@@ -340,7 +306,7 @@ class ImageLocalCache(_PluginBase):
                         }, {
                             "component": "div",
                             "props": {"class": "text-caption text-medium-emphasis"},
-                            "text": "缓存总大小"
+                            "text": "硬盘总占用空间"
                         }]
                     }]
                 }]
@@ -367,7 +333,7 @@ class ImageLocalCache(_PluginBase):
                 "props": {
                     "type": "info",
                     "variant": "tonal",
-                    "text": "暂无缓存记录，媒体入库后将自动记录"
+                    "text": "暂无缓存明细记录，发起搜索或完成入库后将自动记录"
                 }
             }
         else:
@@ -377,17 +343,15 @@ class ImageLocalCache(_PluginBase):
                 "content": [
                     {"component": "thead", "content": [{"component": "tr", "content": [
                         {"component": "th", "props": {"class": "text-start"}, "text": "媒体名称"},
-                        {"component": "th", "props": {"class": "text-center"}, "text": "图片类型"},
-                        {"component": "th", "text": "缓存时间"}
+                        {"component": "th", "props": {"class": "text-center"}, "text": "缓存方式"},
+                        {"component": "th", "text": "更新时间"}
                     ]}]},
                     {"component": "tbody", "content": rows}
                 ]
             }
 
         return [
-            # 3 个统计卡片
             {"component": "VRow", "content": cards},
-            # 最近缓存记录
             {
                 "component": "VRow",
                 "props": {"class": "mt-2"},
@@ -396,7 +360,7 @@ class ImageLocalCache(_PluginBase):
                     "props": {"cols": 12},
                     "content": [{
                         "component": "VCard",
-                        "props": {"title": "最近10条缓存记录", "variant": "outlined"},
+                        "props": {"title": "最新 10 条缓存明细追踪", "variant": "outlined"},
                         "content": [{
                             "component": "VCardText",
                             "props": {"class": "pa-4"},
@@ -408,9 +372,6 @@ class ImageLocalCache(_PluginBase):
         ]
 
     def _build_disabled_page(self) -> List[dict]:
-        """
-        构建插件未启用时的页面。
-        """
         return [{
             "component": "VRow",
             "content": [{
@@ -429,97 +390,126 @@ class ImageLocalCache(_PluginBase):
         }]
 
     def stop_service(self) -> None:
-        """
-        停止插件服务。
-
-        清除模块级 proxy_base，patch 方法保持生效（ProxyBase 为空时不包装）。
-        """
         global _module_proxy_base
         _module_proxy_base = ""
         self._enabled = False
+        if hasattr(self, "_stop_event"):
+            self._stop_event.set()
+
+    def _scheduler_loop(self) -> None:
+        """后台低频校验循环，实现抗重启的定时清空功能。"""
+        while self._enabled and not self._stop_event.is_set():
+            try:
+                self._check_and_clear_cache()
+            except Exception as e:
+                logger.error(f"图片缓存后台任务异常: {e}")
+                
+            for _ in range(3600):
+                if not self._enabled or self._stop_event.is_set():
+                    return
+                time.sleep(1)
+
+    def _check_and_clear_cache(self) -> None:
+        """检查并执行周期性的缓存清空。"""
+        schedule = self._auto_clear_schedule
+        if schedule == "never":
+            return
+            
+        now = datetime.now()
+        
+        if schedule == "monthly":
+            current_period = now.strftime("%Y-%m")
+        elif schedule == "weekly":
+            current_period = now.strftime("%Y-%W")
+        elif schedule == "daily":
+            current_period = now.strftime("%Y-%m-%d")
+        else:
+            return
+            
+        last_period = self.get_data("last_auto_clear_period")
+        
+        if last_period and last_period != current_period:
+            logger.info(f"达到设定的缓存清理周期 ({schedule})，开始自动清空图片...")
+            success, msg = self.execute("clear_all_cache")
+            if success:
+                self.save_data("last_auto_clear_period", current_period)
+        elif not last_period:
+            self.save_data("last_auto_clear_period", current_period)
 
     @eventmanager.register(EventType.TransferComplete)
     def transfer_complete(self, event) -> None:
-        """
-        监听整理完成事件，预缓存媒体图片并记录缓存记录。
-
-        当文件转移完成时，提前下载海报和背景图到本地缓存，
-        确保后续通知发送时直接从本地返回。
-        同时将本次缓存操作记录到 _history，保留最近10条。
-
-        :param event: 整理完成事件对象
-        """
+        """监听整理完成事件，预缓存入库的媒体图片。"""
         if not self._enabled:
             return
         try:
             mediainfo = event.event_data.get("mediainfo")
             if mediainfo:
-                poster = getattr(mediainfo, "poster_path", None)
-                backdrop = getattr(mediainfo, "backdrop_path", None)
+                if hasattr(mediainfo, "_original_get_poster_image"):
+                    poster = mediainfo._original_get_poster_image()
+                else:
+                    poster = mediainfo.get_poster_image()
+                    
+                if hasattr(mediainfo, "_original_get_backdrop_image"):
+                    backdrop = mediainfo._original_get_backdrop_image()
+                else:
+                    backdrop = mediainfo.get_backdrop_image()
+
                 title = getattr(mediainfo, "title", "") or getattr(mediainfo, "original_title", "")
                 if not title:
                     title = "未知"
+                    
                 now_str = datetime.now().strftime("%m-%d %H:%M")
                 types = []
+                
                 if poster:
                     self._precache_image_url(poster)
                     types.append("海报")
                 if backdrop:
                     self._precache_image_url(backdrop)
                     types.append("背景图")
+                    
                 if types:
                     record = {
                         "title": title,
-                        "type": "+".join(types),
+                        "type": f"入库预缓存({'+'.join(types)})",
                         "time": now_str
                     }
                     self._append_history(record)
-                logger.info(f"已预缓存媒体图片：{title}")
         except Exception as e:
-            logger.error(f"预缓存图片失败：{e}")
+            logger.error(f"预缓存入库图片失败：{e}")
 
     def serve_image(self, url: str = ""):
-        """
-        提供图片缓存代理服务（通过查询参数）。
-
-        从本地缓存目录查找图片，如果未命中则从 TMDB 源下载并缓存。
-        使用查询参数（?url=）传递图片地址，避免多级路径的 nginx 代理问题。
-
-        :param url: TMDB 图片完整 URL（建议 URL 编码），格式如 http://.../t/p/w500/xxx.jpg
-        :return: FastAPI Response 对象，包含图片数据
-        """
-        from fastapi.responses import Response
-        from urllib.parse import unquote
+        """提供图片缓存代理服务。"""
+        from fastapi.responses import Response, RedirectResponse, FileResponse
 
         if not url:
             return Response(content=b"", status_code=400, media_type="text/plain")
 
-        # 解码 URL
-        decoded_url = unquote(url)
+        if not self._enabled or not self._cache_dir:
+            return RedirectResponse(url=url)
 
-        # 从 URL 中提取 size 和 path
-        # URL 格式: {scheme}://{domain}/t/p/{size}/{path}
-        import re
-        match = re.search(r"/t/p/([^/]+)/(.+)$", decoded_url)
+        match = re.search(r"/t/p/([^/]+)/(.+)$", url)
         if not match:
-            logger.warning(f"无法从 URL 中提取图片路径: {decoded_url}")
-            return Response(content=b"", status_code=400, media_type="text/plain")
+            return RedirectResponse(url=url)
 
         size = match.group(1)
-        safe_path = match.group(2).lstrip("/")
-        cache_file = Path(self._cache_dir) / size / safe_path
+        if not size.isalnum():
+            logger.warning(f"非法图片尺寸参数: {size}")
+            return RedirectResponse(url=url)
 
-        # 检查本地缓存
-        if cache_file.exists():
-            content = cache_file.read_bytes()
-            content_type = self._guess_mime_type(content)
-            logger.debug(f"缓存命中：{size}/{safe_path}")
-            return Response(content=content, media_type=content_type)
+        filename = Path(match.group(2).split("?")[0]).name
+        if not filename:
+            return RedirectResponse(url=url)
+            
+        cache_file = Path(self._cache_dir) / size / filename
+        cache_headers = {"Cache-Control": "public, max-age=31536000"}
 
-        # 从原始 TMDB 代理域名下载（使用保存的原始回源地址）
-        tmdb_source_url = f"{self._original_tmdb_scheme}{self._original_tmdb_domain}/t/p/{size}/{safe_path}"
+        if cache_file.exists() and cache_file.stat().st_size > 0:
+            logger.info(f"命中本地图片缓存：{size}/{filename}")
+            return FileResponse(path=str(cache_file), headers=cache_headers)
 
-        # 使用系统配置的代理访问 TMDB 源
+        tmdb_source_url = f"{self._original_tmdb_scheme}{self._original_tmdb_domain}/t/p/{size}/{filename}"
+
         proxy = None
         if settings.PROXY_HOST:
             proxy = {
@@ -531,58 +521,64 @@ class ImageLocalCache(_PluginBase):
             resp = RequestUtils(proxies=proxy).get_res(tmdb_source_url, timeout=30)
             if resp and resp.status_code == 200:
                 content = resp.content
-                # 保存到本地缓存
                 cache_file.parent.mkdir(parents=True, exist_ok=True)
-                cache_file.write_bytes(content)
+                
+                tmp_file = cache_file.parent / f"{cache_file.name}.{uuid.uuid4().hex}.tmp"
+                try:
+                    tmp_file.write_bytes(content)
+                    tmp_file.replace(cache_file)
+                    
+                    # 动态追踪记录：当真实发生下载时，尝试在字典中找回电影名称写入明细表
+                    title = ImageLocalCache._filename_to_title.get(filename, "未知搜刮项")
+                    if title != "未知搜刮项":
+                        self._append_history({
+                            "title": title,
+                            "type": "动态代理下载",
+                            "time": datetime.now().strftime("%m-%d %H:%M")
+                        })
+                        
+                except Exception as write_err:
+                    logger.error(f"保存缓存文件失败: {write_err}")
+                finally:
+                    try:
+                        if tmp_file.exists():
+                            tmp_file.unlink()
+                    except Exception:
+                        pass
+
                 content_type = self._guess_mime_type(content)
-                logger.info(f"已缓存图片：{size}/{safe_path}")
-                return Response(content=content, media_type=content_type)
+                logger.info(f"已缓存新图片至本地：{size}/{filename}")
+                return Response(content=content, media_type=content_type, headers=cache_headers)
             else:
-                logger.warning(f"下载图片失败，状态码：{resp.status_code if resp else '无响应'}")
+                logger.warning(f"下载图片失败，状态码：{resp.status_code if resp else '无响应'}，URL: {tmdb_source_url}")
         except Exception as e:
             logger.error(f"下载图片异常：{e}")
 
-        return Response(content=b"", status_code=404, media_type="image/jpeg")
+        return RedirectResponse(url=url)
 
     def _append_history(self, record: dict) -> None:
-        """
-        追加缓存记录到历史列表，保留最近10条。
-
-        :param record: 缓存记录字典，包含 title、type、time
-        """
-        history = self.get_data("_history") or []
-        if not isinstance(history, list):
-            history = []
-        history.insert(0, record)
-        if len(history) > 10:
-            history = history[:10]
-        self.save_data("_history", history)
+        try:
+            history = self.get_data("_history") or []
+            if not isinstance(history, list):
+                history = []
+            history.insert(0, record)
+            if len(history) > 10:
+                history = history[:10]
+            self.save_data("_history", history)
+        except Exception as e:
+            logger.debug(f"保存图片缓存明细失败（可忽略）: {e}")
 
     def _precache_image_url(self, url: str) -> None:
-        """
-        预缓存单张图片。
-
-        将完整 URL 传递给 serve_image 触发下载缓存。
-
-        :param url: TMDB 图片完整 URL
-        """
         if not url:
             return
         try:
-            # 直接传入完整 URL，serve_image 内部会解析
-            from fastapi.responses import Response
             result = self.serve_image(url=url)
-            if result.status_code == 200:
-                logger.debug(f"预缓存成功：{url[:80]}...")
+            if getattr(result, 'status_code', None) == 200:
+                logger.debug(f"预缓存完成：{url[:80]}...")
         except Exception as e:
             logger.debug(f"预缓存单张图片失败：{e}")
 
     def _get_cache_size(self) -> str:
-        """
-        获取缓存目录总大小（人类可读格式）。
-
-        :return: 缓存大小字符串
-        """
         total = 0
         cache_dir = Path(self._cache_dir)
         if cache_dir.exists():
@@ -598,11 +594,6 @@ class ImageLocalCache(_PluginBase):
         return f"{total} B"
 
     def _get_cache_count(self) -> int:
-        """
-        获取缓存文件数量。
-
-        :return: 缓存文件总数
-        """
         cache_dir = Path(self._cache_dir)
         if cache_dir.exists():
             return sum(1 for f in cache_dir.rglob("*") if f.is_file())
@@ -610,12 +601,6 @@ class ImageLocalCache(_PluginBase):
 
     @staticmethod
     def _guess_mime_type(content: bytes) -> str:
-        """
-        根据文件头部字节推断图片 MIME 类型。
-
-        :param content: 图片二进制数据
-        :return: MIME 类型字符串
-        """
         if content[:4] == b"\x89PNG":
             return "image/png"
         if content[:2] == b"\xff\xd8":
@@ -630,70 +615,117 @@ class ImageLocalCache(_PluginBase):
 
 
 # ============================================================
-# 模块级 patch（在 import 时无条件执行，不依赖 init_plugin）
-# 即使 reload 时不触发 init_plugin，patch 也已生效。
-# proxy_base 为空时 URL 原样返回，init_plugin 中设置后自动生效。
+# 模块级 patch（彻底解决直接读属性的搜索盲区）
 # ============================================================
 
 _module_proxy_base = ""
-_module_original_get_message_image = None
-_module_original_get_poster_image = None
-_module_original_get_backdrop_image = None
-
 
 def _module_patch():
-    """保存原始方法并替换为 patched 版本。重复调用安全（防双重嵌套）。"""
-    global _module_proxy_base, _module_original_get_message_image, _module_original_get_poster_image, \
-        _module_original_get_backdrop_image
+    """
+    保存原始方法并动态替换。
+    核心逻辑：不仅拦截调用方法，还拦截对象的实例化(__init__)，并记录日志，实现可视化代理。
+    """
+    global _module_proxy_base
 
-    # 从 settings 自动构造 proxy_base，不依赖 init_plugin
     if not _module_proxy_base and settings.APP_DOMAIN:
         _module_proxy_base = f"{settings.APP_DOMAIN.rstrip('/')}/api/v1/plugin/ImageLocalCache/img?url="
 
-    # 首次调用时保存原始方法
-    if _module_original_get_message_image is None:
-        _module_original_get_message_image = MediaInfo.get_message_image
-    if _module_original_get_poster_image is None:
-        _module_original_get_poster_image = MediaInfo.get_poster_image
-    if _module_original_get_backdrop_image is None:
-        _module_original_get_backdrop_image = MediaInfo.get_backdrop_image
-
     def _wrap_url(url):
-        if url and _module_proxy_base and not url.startswith(_module_proxy_base):
+        if not url or not isinstance(url, str):
+            return url
+        if "/plugin/ImageLocalCache/img?url=" in url:
+            return url
+        if _module_proxy_base and ("/t/p/" in url or "tmdb.org" in url):
             return f"{_module_proxy_base}{quote(url, safe='')}"
         return url
 
-    def _patched_get_message_image(self_obj, default=None):
-        url = _module_original_get_message_image(self_obj, default)
+    # 提取文件特征以供跨层级追踪使用
+    def _extract_and_map(orig_url, title):
+        try:
+            fname = Path(orig_url.split("?")[0]).name
+            if fname:
+                # 保持字典在合理范围内防内存溢出
+                if len(ImageLocalCache._filename_to_title) > 500:
+                    ImageLocalCache._filename_to_title.clear()
+                ImageLocalCache._filename_to_title[fname] = title
+        except Exception:
+            pass
+
+    # --------------------------------------------------------
+    # 1. 拦截 MediaInfo 的方法 (防动态获取调用)
+    # --------------------------------------------------------
+    if not hasattr(MediaInfo, "_original_get_message_image"):
+        MediaInfo._original_get_message_image = MediaInfo.get_message_image
+        MediaInfo._original_get_poster_image = MediaInfo.get_poster_image
+        MediaInfo._original_get_backdrop_image = MediaInfo.get_backdrop_image
+
+    def _patched_get_message_image(self_obj, *args, **kwargs):
+        url = MediaInfo._original_get_message_image(self_obj, *args, **kwargs)
         return _wrap_url(url)
 
-    def _patched_get_poster_image(self_obj, default=None):
-        url = _module_original_get_poster_image(self_obj, default)
+    def _patched_get_poster_image(self_obj, *args, **kwargs):
+        url = MediaInfo._original_get_poster_image(self_obj, *args, **kwargs)
         return _wrap_url(url)
 
-    def _patched_get_backdrop_image(self_obj, default=None):
-        url = _module_original_get_backdrop_image(self_obj, default)
+    def _patched_get_backdrop_image(self_obj, *args, **kwargs):
+        url = MediaInfo._original_get_backdrop_image(self_obj, *args, **kwargs)
         return _wrap_url(url)
 
     MediaInfo.get_message_image = _patched_get_message_image
     MediaInfo.get_poster_image = _patched_get_poster_image
     MediaInfo.get_backdrop_image = _patched_get_backdrop_image
 
+    # --------------------------------------------------------
+    # 2. 拦截 MediaInfo 实例化 (解决企业微信搜索直接读属性的盲区)
+    # --------------------------------------------------------
+    if not hasattr(MediaInfo, "_original_init"):
+        MediaInfo._original_init = MediaInfo.__init__
 
-def _module_unpatch():
-    """恢复原始方法。"""
-    global _module_original_get_message_image, _module_original_get_poster_image, \
-        _module_original_get_backdrop_image
-    if _module_original_get_message_image is not None:
-        MediaInfo.get_message_image = _module_original_get_message_image
-        _module_original_get_message_image = None
-    if _module_original_get_poster_image is not None:
-        MediaInfo.get_poster_image = _module_original_get_poster_image
-        _module_original_get_poster_image = None
-    if _module_original_get_backdrop_image is not None:
-        MediaInfo.get_backdrop_image = _module_original_get_backdrop_image
-        _module_original_get_backdrop_image = None
+    def _patched_mediainfo_init(self_obj, *args, **kwargs):
+        MediaInfo._original_init(self_obj, *args, **kwargs)
+        replaced = False
+        title = getattr(self_obj, "title", "") or getattr(self_obj, "original_title", "未知媒体")
+        
+        # 拦截对象的诞生，直接修改其底层属性，同时记录映射追踪特征
+        if isinstance(getattr(self_obj, "poster_path", None), str):
+            orig = self_obj.poster_path
+            self_obj.poster_path = _wrap_url(orig)
+            if orig != self_obj.poster_path:
+                _extract_and_map(orig, title)
+                replaced = True
+                
+        if isinstance(getattr(self_obj, "backdrop_path", None), str):
+            orig = self_obj.backdrop_path
+            self_obj.backdrop_path = _wrap_url(orig)
+            if orig != self_obj.backdrop_path:
+                _extract_and_map(orig, title)
+                replaced = True
+                
+        if replaced:
+            logger.info(f"已注入图片代理链接: {title}")
 
+    MediaInfo.__init__ = _patched_mediainfo_init
 
-# 模块导入时立即执行 patch
+    # --------------------------------------------------------
+    # 3. 拦截 Notification 实例化 (兜底包含 image 字段的普通通知)
+    # --------------------------------------------------------
+    try:
+        from app.schemas.types import Notification
+        if not hasattr(Notification, "_original_init"):
+            Notification._original_init = Notification.__init__
+        
+        def _patched_notification_init(self_obj, *args, **kwargs):
+            Notification._original_init(self_obj, *args, **kwargs)
+            if isinstance(getattr(self_obj, "image", None), str):
+                orig = self_obj.image
+                self_obj.image = _wrap_url(orig)
+                if orig != self_obj.image:
+                    title = getattr(self_obj, "title", "未知通知")
+                    logger.info(f"已注入通知消息图片代理: {title}")
+                
+        Notification.__init__ = _patched_notification_init
+    except Exception as e:
+        logger.debug(f"拦截 Notification 失败: {e}")
+
+# 模块导入时立即安全执行 patch
 _module_patch()
