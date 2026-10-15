@@ -14,13 +14,17 @@
   },
   "imagelocalcache": {
     "name": "本地图片缓存代理",
-    "description": "将 TMDB 图片缓存到本地，通过插件 API 提供快速访问。自动替换所有 TMDB 图片 URL 为本地缓存地址，首次访问自动从 TMDB 下载缓存，后续直接返回本地文件。",
-    "version": "1.0.0",
+    "description": "将 TMDB 图片缓存到本地，通过插件 API 提供快速访问。自动替换所有 TMDB 图片 URL 为本地缓存地址，带自动化老化清理机制，防止硬盘被无限占用。",
+    "version": "1.1.5",
     "icon": "https://raw.githubusercontent.com/wenzhanquan/MoviePilot-Plugins/main/plugins.v2/imagelocalcache/icon.png",
     "labels": "消息通知",
     "author": "wenzhanquan",
     "author_url": "https://github.com/wenzhanquan",
-    "release": false
+    "level": 1,
+    "history": {
+      "v1.0.0": "初始版本",
+      "v1.1.5": "修复外网直连超时、增加多线程锁防SQLite死锁、新增对象级实例化底层拦截解决企业微信搜索读底层属性盲区、新增实时缓存明细追踪表、新增防重启周期自动清理机制"
+    }
   },
   "CaishenPTShout": {
     "name": "财神PT喊话",
@@ -88,7 +92,7 @@
     "history": {
       "v1.0.0": "基于 MediaServerMsgMod 魔改版，图片 URL 走本地缓存代理",
       "v1.0.1": "修复非聚合入库消息图片未走本地缓存代理的问题",
-      "v1.0.11": "版本号与插件内 plugin_version 对齐修正"
+      "v1.0.11": "终极重构：新增全量JSON地毯式正则特征扫描彻底解决Emby原包季集数缺失聚合失效问题、新增LRU内存泄露防范机制、增强APP_DOMAIN全协议清洗与TMDB宕机强缓存污染防范、添加完整微信端Emoji排版支持"
     }
   },
   "HermesNotificationForwarder": {
