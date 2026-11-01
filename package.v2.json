@@ -3,7 +3,7 @@
     "name": "站点自动签到",
     "description": "自动模拟登录、签到站点。",
     "version": "1.0.0",
-    "icon": "https://raw.githubusercontent.com/wenzhanquan/MoviePilot-Plugins/main/plugins.v2/autosignin/signin.png",
+    "icon": "https://fastly.jsdelivr.net/gh/wenzhanquan/MoviePilot-Plugins@main/plugins.v2/autosignin/signin.png",
     "labels": "站点工具",
     "author": "wenzhanquan",
     "author_url": "https://github.com/wenzhanquan",
@@ -16,7 +16,7 @@
     "name": "财神PT喊话",
     "description": "定时在财神PT站点群聊区发送喊话消息，如「财神，求上传」等。自动读取站点Cookie，支持自定义喊话内容和定时间隔。",
     "version": "1.0.0",
-    "icon": "https://raw.githubusercontent.com/wenzhanquan/MoviePilot-Plugins/main/plugins.v2/caishenptshout/caishen.png",
+    "icon": "https://fastly.jsdelivr.net/gh/wenzhanquan/MoviePilot-Plugins@main/plugins.v2/caishenptshout/caishen.png",
     "labels": "站点工具",
     "author": "wenzhanquan",
     "author_url": "https://github.com/wenzhanquan",
@@ -54,8 +54,8 @@
     }
   },
   "LLMApiKeyAutoSwitch": {
-    "name": "API Key 自动切换",
-    "description": "检测 API Key 额度，耗尽时自动切换到备用 Key。",
+    "name": "免费token Api Key自动切换",
+    "description": "支持主 Key + 多组备用 Key 轮询切换，检测到额度耗尽时自动依次切换。",
     "version": "1.0.0",
     "icon": "https://raw.githubusercontent.com/wenzhanquan/MoviePilot-Plugins/main/plugins.v2/llmapikeyautoswitch/icon.png",
     "labels": "系统工具",
@@ -79,15 +79,17 @@
       "v1.0.0": "基于 MediaServerMsgMod 魔改版，图片 URL 走本地缓存代理",
       "v1.0.1": "修复非聚合入库消息图片未走本地缓存代理的问题",
       "v1.0.11": "终极重构：新增全量JSON地毯式正则特征扫描彻底解决Emby原包季集数缺失聚合失效问题、新增LRU内存泄露防范机制、增强APP_DOMAIN全协议清洗与TMDB宕机强缓存污染防范、添加完整微信端Emoji排版支持",
-      "v1.0.29": "修复 Emby 描述中的连续集、不连续集及多季解析，按实际季集去重统计，保留特别篇第零季；隔离服务器聚合并统一图片缓存代理基址。",
-      "v1.0.30": "使用前端内置图标，避免图片代理域名限制；聚合等待从最后一条通知重新计时，忽略已取消的旧定时器回调。",
-      "v1.0.31": "支持 Emby system.webhooktest 测试事件，补充测试通知标题。"
+      "v1.0.29": "修复 Emby 多集汇总解析、真实集数统计、本地图标及图片代理基址。",
+      "v1.0.30": "Use built-in icon and wait after the last webhook, matching MediaServerMsgMod.",
+      "v1.0.31": "Support native Emby system.webhooktest notification.",
+      "v1.0.25": "订阅反查性能核弹级优化，增加 limit 阻断防 OOM，杜绝任何查库导致高并发超时的可能性",
+      "v1.0.28": "全面替换为 fastly.jsdelivr.net 节点，彻底解决国内网络环境下无法显示插件图标的拦截问题"
     }
   },
   "HermesNotificationForwarder": {
     "name": "Hermes通知转发",
     "description": "接收Hermes推送的消息，通过MP通知渠道（企微/微信）发送给管理员",
-    "version": "2.1",
+    "version": "2.2",
     "icon": "https://raw.githubusercontent.com/wenzhanquan/MoviePilot-Plugins/main/plugins.v2/hermesnotificationforwarder/icon.png",
     "labels": "消息通知",
     "author": "wenzhanquan",
@@ -100,7 +102,7 @@
   },
   "ImageLocalCache": {
     "name": "本地图片缓存代理",
-    "description": "将 TMDB 图片缓存到本地，通过插件 API 提供快速访问。自动替换所有 TMDB 图片 URL 为本地缓存地址，带自动化老化清理机制，防止硬盘被无限占用。",
+    "description": "将 TMDB 图片缓存到本地，通过插件 API 提供快速访问。自动替换所有 TMDB 图片 URL 为本地缓存地址，内置周期性自动清空任务与动态追踪，防止硬盘被无限占用。",
     "version": "1.1.6",
     "icon": "https://raw.githubusercontent.com/wenzhanquan/MoviePilot-Plugins/main/plugins.v2/imagelocalcache/icon.png",
     "labels": "消息通知",
@@ -112,5 +114,229 @@
       "v1.1.5": "修复外网直连超时、增加多线程锁防SQLite死锁、新增对象级实例化底层拦截解决企业微信搜索读底层属性盲区、新增实时缓存明细追踪表、新增防重启周期自动清理机制",
       "v1.1.6": "缓存命中时根据文件头返回真实 MIME，修复 jpg 地址返回 WebP 后响应类型不一致的问题；索引 ID 统一为 ImageLocalCache。"
     }
+  },
+  "SiteStatistic": {
+    "name": "站点数据统计",
+    "description": "站点统计数据图表。",
+    "version": "1.9.7",
+    "icon": "statistic.png",
+    "author": "lightolly,jxxghp",
+    "author_url": "https://github.com/lightolly",
+    "level": 2
+  },
+  "MediaServerRefresh": {
+    "name": "媒体库服务器刷新",
+    "description": "入库后自动刷新Emby/Jellyfin/Plex服务器海报墙。",
+    "version": "1.3.3",
+    "icon": "refresh2.png",
+    "author": "jxxghp",
+    "author_url": "https://github.com/jxxghp",
+    "level": 1
+  },
+  "CustomHosts": {
+    "name": "自定义Hosts",
+    "description": "修改系统hosts文件，加速网络访问。",
+    "version": "1.2.2",
+    "icon": "hosts.png",
+    "author": "thsrite",
+    "author_url": "https://github.com/thsrite",
+    "level": 1
+  },
+  "CloudflareSpeedTest": {
+    "name": "Cloudflare IP优选",
+    "description": "🌩 测试 Cloudflare CDN 延迟和速度，自动优选IP。",
+    "version": "1.5.1",
+    "icon": "cloudflare.jpg",
+    "author": "thsrite",
+    "author_url": "https://github.com/thsrite",
+    "level": 1
+  },
+  "LibraryScraper": {
+    "name": "媒体库刮削",
+    "description": "定时对媒体库进行刮削，补齐缺失元数据和图片。",
+    "version": "2.1.4",
+    "icon": "scraper.png",
+    "author": "jxxghp",
+    "author_url": "https://github.com/jxxghp"
+  },
+  "RemoveLink": {
+    "name": "清理媒体文件",
+    "description": "媒体文件清理工具：支持硬链接文件清理、STRM文件清理、刮削文件清理（元数据、图片、字幕）、转移记录清理、种子联动删除等功能",
+    "version": "2.18",
+    "icon": "Ombi_A.png",
+    "author": "DzAvril",
+    "author_url": "https://github.com/DzAvril",
+    "level": 1
+  },
+  "CategoryEditor": {
+    "name": "二级分类策略",
+    "description": "编辑下载和整理时自动二级分类的目录规则。",
+    "version": "1.3",
+    "icon": "Bookstack_A.png",
+    "author": "jxxghp",
+    "author_url": "https://github.com/jxxghp",
+    "level": 1
+  },
+  "CleanInvalidSeed": {
+    "name": "清理无效做种",
+    "description": "清理已经被站点删除的种子及源文件，支持qBittorrent和Transmission",
+    "version": "2.1",
+    "icon": "clean_a.png",
+    "author": "DzAvril",
+    "author_url": "https://github.com/DzAvril",
+    "level": 1
+  },
+  "PluginMarketsAutoUpdate": {
+    "name": "插件库更新推送",
+    "description": "支持从官方Wiki中获取记录的最新全量插件库、结合添加黑名单，自动化添加插件库。",
+    "version": "2.1",
+    "icon": "upload.png",
+    "author": "Aqr-K",
+    "author_url": "https://github.com/Aqr-K",
+    "level": 1
+  },
+  "PluginAutoUpgrade": {
+    "name": "插件自动升级",
+    "description": "定时检测、升级插件。",
+    "version": "2.4.2",
+    "icon": "https://raw.githubusercontent.com/hotlcc/MoviePilot-Plugins-Third/main/icons/PluginAutoUpgrade.png",
+    "author": "hotlcc",
+    "author_url": "https://github.com/hotlcc",
+    "level": 1
+  },
+  "CFIPSelector": {
+    "name": "PT云盾优选",
+    "description": "PT站点专属优选IP，自动写入hosts，访问快人一步",
+    "version": "1.3.0",
+    "icon": "https://raw.githubusercontent.com/xijin285/MoviePilot-Plugins/refs/heads/main/icons/cfipselector.png",
+    "author": "xijin285",
+    "author_url": "https://github.com/xijin285",
+    "level": 2
+  },
+  "RemoteIdentifiers": {
+    "name": "共享识别词",
+    "description": "从Github、Etherpad远程文件中获取共享识别词并应用",
+    "version": "2.4.1",
+    "icon": "words.png",
+    "author": "honue",
+    "author_url": "https://github.com/honue",
+    "level": 1
+  },
+  "IdentifierHelper": {
+    "name": "自定义识别词助手",
+    "description": "帮助管理自定义识别词，支持标签分类和可视化编辑",
+    "version": "1.0.2",
+    "icon": "https://raw.githubusercontent.com/HankunYu/MoviePilot-Plugins/main/icons/Identifier.png",
+    "author": "hankun",
+    "author_url": "https://github.com/hankunyu",
+    "level": 1
+  },
+  "Commands": {
+    "name": "命令管理",
+    "description": "实现微信、Telegram等客户端的命令管理。",
+    "version": "1.0",
+    "icon": "https://raw.githubusercontent.com/InfinityPacer/MoviePilot-Plugins/main/icons/commands.png",
+    "author": "InfinityPacer",
+    "author_url": "https://github.com/InfinityPacer",
+    "level": 1
+  },
+  "FileCopy": {
+    "name": "文件复制",
+    "description": "自定义文件类型从源目录复制到目的目录。",
+    "version": "1.1",
+    "icon": "https://raw.githubusercontent.com/thsrite/MoviePilot-Plugins/main/icons/copy_files.png",
+    "author": "thsrite",
+    "author_url": "https://github.com/thsrite",
+    "level": 1
+  },
+  "WeatherWidget": {
+    "name": "天气",
+    "description": "定时推送天气，并在仪表盘中显示实时天气。",
+    "version": "2.0",
+    "icon": "https://raw.githubusercontent.com/InfinityPacer/MoviePilot-Plugins/main/icons/weatherwidget.png",
+    "author": "InfinityPacer",
+    "author_url": "https://github.com/InfinityPacer",
+    "level": 1
+  },
+  "RssSubscribe": {
+    "name": "自定义订阅",
+    "description": "定时刷新RSS报文，识别内容后添加订阅或直接下载。",
+    "version": "2.1",
+    "icon": "rss.png",
+    "author": "jxxghp",
+    "author_url": "https://github.com/jxxghp",
+    "level": 2
+  },
+  "MediaCoverGenerator": {
+    "name": "Emby媒体库封面生成",
+    "description": "生成媒体库动态/静态封面，支持 Emby/Jellyfin",
+    "version": "0.9.6",
+    "icon": "https://raw.githubusercontent.com/justzerock/MoviePilot-Plugins/main/icons/emby.png",
+    "author": "呀哈哈",
+    "author_url": "https://github.com/justzerock/MoviePilot-Plugins",
+    "level": 1
+  },
+  "SaMediaSyncDel": {
+    "name": "神医媒体文件同步删除",
+    "description": "通过神医插件通知同步删除历史记录、源文件和下载任务。",
+    "version": "1.0.8",
+    "icon": "mediasyncdel.png",
+    "author": "DDSRem,thsrite",
+    "author_url": "https://github.com/DDSRem",
+    "level": 1
+  },
+  "LogsClean": {
+    "name": "日志清理vue",
+    "description": "定时清理插件产生的日志",
+    "version": "2.1",
+    "icon": "https://raw.githubusercontent.com/madrays/MoviePilot-Plugins/main/icons/clean.png",
+    "author": "madrays",
+    "author_url": "https://github.com/madrays",
+    "level": 1
+  },
+  "CureTMDbAnime": {
+    "name": "CTMDbA",
+    "description": "将 TMDb 上被合并为一季的番剧拆分为多季，不影响订阅与刮削。",
+    "version": "2.4.1",
+    "icon": "https://raw.githubusercontent.com/wikrin/MoviePilot-Plugins/main/icons/ctmdbanime.png",
+    "author": "Attente",
+    "author_url": "https://github.com/wikrin",
+    "level": 1
+  },
+  "AutoBackup": {
+    "name": "自动备份",
+    "description": "自动备份数据和配置文件。",
+    "version": "2.1.4",
+    "icon": "Time_machine_B.png",
+    "author": "thsrite",
+    "author_url": "https://github.com/thsrite",
+    "level": 1
+  },
+  "GroupChatZone": {
+    "name": "群聊区",
+    "description": "执行站点喊话、获取反馈、定时任务。",
+    "version": "2.3.3",
+    "icon": "https://raw.githubusercontent.com/KoWming/MoviePilot-Plugins/main/icons/Octopus.png",
+    "author": "KoWming,madrays",
+    "author_url": "https://github.com/KoWming",
+    "level": 2
+  },
+  "MediaServerMsgMod": {
+    "name": "媒体服务器通知插件魔改版",
+    "description": "发送Emby/Jellyfin/Plex服务器的播放、入库等通知消息。",
+    "version": "1.8.2.1",
+    "icon": "mediaplay.png",
+    "author": "jxxghp,Seed680",
+    "author_url": "https://github.com/jxxghp",
+    "level": 1
+  },
+  "P115StrmHelper": {
+    "name": "115网盘STRM助手",
+    "description": "115网盘STRM生成一条龙服务",
+    "version": "2.8.79",
+    "icon": "https://raw.githubusercontent.com/jxxghp/MoviePilot-Frontend/refs/heads/v2/src/assets/images/misc/u115.png",
+    "author": "DDSRem",
+    "author_url": "https://github.com/DDSRem",
+    "level": 1
   }
 }

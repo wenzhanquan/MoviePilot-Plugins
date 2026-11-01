@@ -68,3 +68,10 @@ python -m pytest tests/test_mediaservermsglocal.py tests/test_imagelocalcache.py
 ```
 
 测试隔离 MoviePilot 的数据库、事件注册和外部消息渠道，不访问真实媒体服务器或发送通知。
+
+
+## 本地插件稳定快照
+
+已集中归档 33 个本地插件，包含当前版本的源码、静态资源及随插件附带的依赖文件。
+详见[版本清单与更新说明](LOCAL_PLUGIN_SNAPSHOT.md)及[机器可读清单](PLUGIN_SNAPSHOT.json)。
+保持自动升级关闭，按插件逐个更新；集中镜像不代表未来兼容性保证。
