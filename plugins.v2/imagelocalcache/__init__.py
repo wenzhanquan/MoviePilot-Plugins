@@ -33,7 +33,7 @@ class ImageLocalCache(_PluginBase):
         "内置周期性自动清空任务与动态追踪，防止硬盘被无限占用。"
     )
     plugin_icon = "https://raw.githubusercontent.com/wenzhanquan/MoviePilot-Plugins/main/plugins.v2/imagelocalcache/icon.png"
-    plugin_version = "1.1.5"
+    plugin_version = "1.1.6"
     plugin_label = "消息通知"
     plugin_author = "wenzhanquan"
     author_url = "https://github.com/wenzhanquan"
@@ -506,7 +506,10 @@ class ImageLocalCache(_PluginBase):
 
         if cache_file.exists() and cache_file.stat().st_size > 0:
             logger.info(f"命中本地图片缓存：{size}/{filename}")
-            return FileResponse(path=str(cache_file), headers=cache_headers)
+            # TMDB 的 jpg 地址可能返回 WebP，不能由文件后缀推断响应类型。
+            with cache_file.open("rb") as cached_image:
+                content_type = self._guess_mime_type(cached_image.read(16))
+            return FileResponse(path=str(cache_file), headers=cache_headers, media_type=content_type)
 
         tmdb_source_url = f"{self._original_tmdb_scheme}{self._original_tmdb_domain}/t/p/{size}/{filename}"
 

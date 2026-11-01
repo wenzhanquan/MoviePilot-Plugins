@@ -9,7 +9,7 @@
 ### 1. 🖼️ 本地图片缓存代理 (ImageLocalCache)
 - **简介**：将 TMDB 图片自动缓存到本地服务器，并通过插件 API 提供快速访问。
 - **特色**：自动拦截并替换所有 TMDB 图片 URL 为本地缓存地址。首次访问时自动从 TMDB 下载缓存，后续直接从本地文件秒速返回，完美解决外网（如企业微信等）加载图片慢或失败的问题。
-- **图标**：<img src="plugins.v2/imagelocalcache/image.png" width="30">
+- **图标**：<img src="plugins.v2/imagelocalcache/icon.png" width="30">
 
 ### 2. 🏥 MP插件健康检测 (MpPluginHealthCheck)
 - **简介**：全天候插件管家，定时检测已安装插件的状态变化。
@@ -41,3 +41,30 @@
 4. 在 MoviePilot WebUI 的「设置」-「插件」中找到对应的插件，点击开启并进行相关配置即可。
 
 > 👨‍💻 **Author**: wenzhanquan
+
+
+## 媒体服务器通知本地版（MediaServerMsgLocal）
+
+当前版本 **1.0.31**，配合 **ImageLocalCache 1.1.6** 使用。支持 Emby 单集事件和
+`S01 E25, E29`、`S01 E26-E27` 等汇总事件；按真实季集去重计数，连续通知在最后一条之后等待配置的聚合时间再发送。
+
+使用前启用本地图片缓存代理，并配置消息客户端可访问的对外域名；如同时启用魔改版，会收到两份通知。
+通知本地版的图标使用 MoviePilot 内置资源，不再依赖外部 CDN。
+
+图片代理索引 ID 已统一为 `ImageLocalCache`，与插件类名一致。已有安装如果仍包含小写
+`imagelocalcache` 登记，应保留正确的 `ImageLocalCache`，清理重复登记，避免启动时反复安装。
+
+详细说明：
+
+- [媒体服务器通知本地版](plugins.v2/mediaservermsglocal/README.md)
+- [本地图片缓存代理](plugins.v2/imagelocalcache/README.md)
+
+### 回归测试
+
+安装 pytest 后，在仓库根目录运行：
+
+```sh
+python -m pytest tests/test_mediaservermsglocal.py tests/test_imagelocalcache.py
+```
+
+测试隔离 MoviePilot 的数据库、事件注册和外部消息渠道，不访问真实媒体服务器或发送通知。

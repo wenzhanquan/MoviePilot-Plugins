@@ -1,8 +1,10 @@
 import re
+import json
 import threading
 import time
 from typing import Any, List, Dict, Tuple, Optional
 from urllib.parse import quote
+from pathlib import Path
 
 from app.core.cache import cached
 from app.core.config import settings
@@ -36,8 +38,11 @@ class MediaServerMsgLocal(_PluginBase):
     # 插件基本信息
     plugin_name = "媒体服务器通知本地版"
     plugin_desc = "发送Emby/Jellyfin/Plex服务器的播放、入库等通知消息。图片已走本地缓存代理。"
-    plugin_icon = "https://raw.githubusercontent.com/wenzhanquan/MoviePilot-Plugins/main/plugins.v2/mediaservermsglocal/icon.png"
-    plugin_version = "1.0.11"
+    
+    # 使用前端自带资源，避免 HTTP 图标被再次交给域名受限的图片代理。
+    plugin_icon = "mediaplay.png"
+    
+    plugin_version = "1.0.31"
     plugin_author = "wenzhanquan"
     author_url = "https://github.com/wenzhanquan"
     plugin_config_prefix = "mediaservermsglocal_"
@@ -48,6 +53,7 @@ class MediaServerMsgLocal(_PluginBase):
     _webhook_actions = {
         "library.new": "新入库",
         "system.notificationtest": "测试",
+        "system.webhooktest": "测试",
         "playback.start": "开始播放",
         "playback.stop": "停止播放",
         "user.authenticated": "登录成功",
@@ -69,7 +75,6 @@ class MediaServerMsgLocal(_PluginBase):
     def __init__(self):
         super().__init__()
         self.category = CategoryHelper()
-        # 初始化并发安全锁与独立内存字典，防止热重载引发的幽灵数据逃逸
         self._lock = threading.Lock()
         self._pending_messages = {}
         self._aggregate_timers = {}
@@ -93,7 +98,6 @@ class MediaServerMsgLocal(_PluginBase):
             self._aggregate_time = int(config.get("aggregate_time", self.DEFAULT_AGGREGATE_TIME))
 
     def service_infos(self, type_filter: Optional[str] = None) -> Optional[Dict[str, ServiceInfo]]:
-        """获取媒体服务器信息服务信息"""
         if not self._mediaservers:
             return None
 
@@ -109,7 +113,6 @@ class MediaServerMsgLocal(_PluginBase):
         return active_services if active_services else None
 
     def service_info(self, name: str) -> Optional[ServiceInfo]:
-        """根据名称获取特定媒体服务器服务信息"""
         service_infos = self.service_infos() or {}
         return service_infos.get(name)
 
@@ -121,7 +124,66 @@ class MediaServerMsgLocal(_PluginBase):
         return []
 
     def get_api(self) -> List[Dict[str, Any]]:
-        return []
+        """注册本地图标接口"""
+        return [{"path": "/icon", "endpoint": self.serve_icon, "methods": ["GET"],
+                 "summary": "通知插件本地图标", "allow_anonymous": True}]
+
+    def serve_icon(self) -> Any:
+        """返回随插件保存的图标文件"""
+        from fastapi.responses import FileResponse
+        return FileResponse(Path(__file__).with_name("icon.png"), media_type="image/png",
+                            headers={"Cache-Control": "public, max-age=86400"})
+
+    def _get_cached_image_url(self, image_url: Optional[str]) -> Optional[str]:
+        """使用图片缓存插件的对外域名，避免重复嵌套代理地址。"""
+        if not image_url or "/api/v1/plugin/ImageLocalCache/img?url=" in image_url:
+            return image_url
+        config = self.get_config("ImageLocalCache") or {}
+        domain = str(config.get("external_domain") or settings.APP_DOMAIN or "").rstrip("/")
+        if not domain:
+            return image_url
+        return f"{domain}/api/v1/plugin/ImageLocalCache/img?url={quote(image_url, safe='')}"
+
+    def _extract_episode_pairs(self, event: WebhookEventInfo) -> List[Tuple[int, int]]:
+        """从 Emby 汇总描述或单集元数据提取完整季集，保留特别篇的第零季。"""
+        payload = getattr(event, "json_object", None)
+        payload = payload if isinstance(payload, dict) else {}
+        item = payload.get("Item") or payload.get("Metadata") or {}
+        item = item if isinstance(item, dict) else {}
+        pairs = set()
+        description = str(payload.get("Description") or "")
+        # Emby 把一次扫描的多集放在一条 Series Webhook 中，而非每集单独通知。
+        pattern = r"S(\d{1,3})\s*(E\d{1,4}(?:\s*-\s*E?\d{1,4})?(?:\s*[,，、]\s*E?\d{1,4}(?:\s*-\s*E?\d{1,4})?)*)"
+        for match in re.finditer(pattern, description, re.IGNORECASE):
+            season = int(match.group(1))
+            for token in re.split(r"\s*[,，、]\s*", match.group(2)):
+                bounds = re.fullmatch(r"E?(\d{1,4})(?:\s*-\s*E?(\d{1,4}))?", token, re.IGNORECASE)
+                if bounds:
+                    start = int(bounds.group(1))
+                    end = int(bounds.group(2) or start)
+                    if start <= end:
+                        pairs.update((season, episode) for episode in range(start, end + 1))
+        if pairs:
+            return sorted(pairs)
+        if str(item.get("Type") or getattr(event, "media_type", "")).upper() in ("SERIES", "SEASON"):
+            return []
+        season, episode, _ = self._extract_season_episode(event)
+        if episode is not None:
+            season_value = item.get("ParentIndexNumber")
+            if season_value is not None:
+                season = int(season_value)
+            end = item.get("IndexNumberEnd")
+            try:
+                end = int(end) if end is not None else episode
+            except (ValueError, TypeError):
+                end = episode
+            if episode <= end <= 9999:
+                pairs.update((season, number) for number in range(episode, end + 1))
+        return sorted(pairs)
+
+    def _get_episode_count(self, events: List[WebhookEventInfo]) -> int:
+        """按去重后的季集计数，不将 Webhook 条数当成入库集数。"""
+        return len({pair for event in events for pair in self._extract_episode_pairs(event)})
 
     def get_form(self) -> Tuple[List[dict], Dict[str, Any]]:
         types_options = [
@@ -298,8 +360,118 @@ class MediaServerMsgLocal(_PluginBase):
             "aggregate_time": 15
         }
 
+    def _record_history(self, title: str, detail: str = ""):
+        """记录通知发送历史，提供给 get_page 渲染展示"""
+        try:
+            history = self.get_data("msg_history") or []
+            if not isinstance(history, list):
+                history = []
+            
+            record = {
+                "time": time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time())),
+                "title": title,
+                "detail": detail
+            }
+            history.insert(0, record)
+            if len(history) > 50:
+                history = history[:50]
+                
+            self.save_data("msg_history", history)
+        except Exception as e:
+            logger.debug(f"保存通知历史记录失败: {e}")
+
     def get_page(self) -> List[dict]:
-        return []
+        """在 MP 网页端点击插件时渲染历史记录看板"""
+        history = self.get_data("msg_history") or []
+        
+        if not history or not isinstance(history, list):
+            return [
+                {
+                    "component": "VAlert",
+                    "props": {
+                        "type": "info",
+                        "variant": "tonal",
+                        "text": "暂无发送记录，当有新的剧集入库或播放通知发送后，将在这里展示明细。"
+                    }
+                }
+            ]
+
+        rows = []
+        for item in history:
+            rows.append({
+                "component": "tr",
+                "content": [
+                    {"component": "td", "text": item.get("time", "")},
+                    {"component": "td", "text": item.get("title", "")},
+                    {"component": "td", "text": item.get("detail", "")},
+                ]
+            })
+
+        return [
+            {
+                "component": "VCard",
+                "props": {"title": "历史推送明细看板 (最近 50 条)", "variant": "outlined"},
+                "content": [
+                    {
+                        "component": "VTable",
+                        "props": {"density": "compact", "hover": True},
+                        "content": [
+                            {
+                                "component": "thead",
+                                "content": [
+                                    {
+                                        "component": "tr",
+                                        "content": [
+                                            {"component": "th", "props": {"class": "text-left", "width": "180px"}, "text": "时间戳"},
+                                            {"component": "th", "props": {"class": "text-left", "width": "350px"}, "text": "触发事件"},
+                                            {"component": "th", "props": {"class": "text-left"}, "text": "入库剧集明细 / 其他"}
+                                        ]
+                                    }
+                                ]
+                            },
+                            {
+                                "component": "tbody",
+                                "content": rows
+                            }
+                        ]
+                    }
+                ]
+            }
+        ]
+
+    def _get_subscriber_names(self, tmdb_id: str) -> str:
+        """【性能核弹优化】带着 tmdb_id 潜入 MP 数据库反查订阅此媒体的用户，加入 limit 防内存溢出与死锁"""
+        if not tmdb_id:
+            return "未知"
+        try:
+            from app.db.models.subscribe import Subscribe
+            from app.db.models.user import User
+            from app.db import db
+            
+            # 清洗 tmdb_id 确保纯数字，防 SQL 报错
+            match = re.search(r'\d+', str(tmdb_id))
+            if not match:
+                return "未知"
+            clean_tmdbid = int(match.group())
+            
+            # 【优化防御】：强行只取前20条订阅记录，速度维持在毫秒级，防止脏数据无限膨胀导致的卡顿
+            subs = db.session.query(Subscribe).filter(Subscribe.tmdbid == clean_tmdbid).limit(20).all()
+            if not subs:
+                return "未知"
+            
+            users = set()
+            for sub in subs:
+                uid = getattr(sub, 'userid', None) or getattr(sub, 'uid', None)
+                if uid:
+                    u = db.session.query(User).filter(User.id == uid).first()
+                    name = getattr(u, 'name', None) or getattr(u, 'nickname', None)
+                    if name:
+                        users.add(str(name))
+            
+            return "、".join(users) if users else "未知"
+        except Exception as e:
+            logger.debug(f"反查订阅用户异常: {e}")
+            return "未知"
 
     @eventmanager.register(EventType.WebhookMessage)
     def send(self, event: Event):
@@ -312,10 +484,20 @@ class MediaServerMsgLocal(_PluginBase):
             if not event_info:
                 return
 
-            # 先行执行过期缓存池清理，防止挂机导致的内存泄露
+            event_type = getattr(event_info, 'event', None)
+            
+            if event_type == "library.new":
+                item_n = getattr(event_info, 'item_name', '未知')
+                item_t = getattr(event_info, 'item_type', '未知')
+                logger.info(f"📡 [海关探针] 收到 Emby 入库 Webhook -> 名称: {item_n} | 类型: {item_t}")
+                try:
+                    raw_json = json.dumps(getattr(event_info, 'json_object', {}), ensure_ascii=False)
+                    logger.info(f"📦 [海关探针-原始报文] {raw_json}")
+                except Exception as e:
+                    logger.debug(f"原始报文打印失败: {e}")
+
             self.__clean_expired_elements()
 
-            event_type = getattr(event_info, 'event', None)
             if not event_type or not self._webhook_actions.get(event_type):
                 return
 
@@ -343,8 +525,7 @@ class MediaServerMsgLocal(_PluginBase):
                     if event_type != "library.new": return False
                     
                     item_type = getattr(event_info, 'item_type', '')
-                    # 严防大小写敏感和特殊命名漏网之鱼
-                    if str(item_type).upper() not in ["TV", "SHOW", "EPISODE", "SERIES"]: return False
+                    if str(item_type).upper() not in ["TV", "SHOW", "EPISODE", "SERIES", "SEASON"]: return False
                     
                     json_object = getattr(event_info, 'json_object', None)
                     if json_object and not isinstance(json_object, dict): return False
@@ -352,14 +533,13 @@ class MediaServerMsgLocal(_PluginBase):
                 except Exception:
                     return False
 
-            # 遇到剧集入库走聚合流程
             if should_aggregate_tv():
                 series_id = self._get_series_id(event_info)
                 if series_id:
                     self._aggregate_tv_episodes(series_id, event_info)
                     return
 
-            # 以下是非聚合流程（电影、有声书、单集播放等事件）
+            # ============== 以下是非聚合流程（电影、单集、播放等） ==============
             item_id = getattr(event_info, 'item_id', '')
             client = getattr(event_info, 'client', '')
             user_name = getattr(event_info, 'user_name', '')
@@ -373,13 +553,14 @@ class MediaServerMsgLocal(_PluginBase):
                 return
 
             item_type = str(getattr(event_info, 'item_type', '')).upper()
-            item_name = getattr(event_info, 'item_name', '')
+            item_name = getattr(event_info, 'item_name', '') or ''
+            if event_type == "system.webhooktest" and not item_name:
+                item_name = "Emby Webhook 连通性测试"
 
             message_title = ""
             event_action = self._webhook_actions.get(event_type, event_type)
             
-            # 丰富消息标题 Emoji
-            if item_type in ["TV", "SHOW", "EPISODE", "SERIES"]:
+            if item_type in ["TV", "SHOW", "EPISODE", "SERIES", "SEASON"]:
                 message_title = f"📺 {event_action}剧集：{item_name}"
             elif item_type in ["MOV", "MOVIE"]:
                 message_title = f"🎬 {event_action}电影：{item_name}"
@@ -390,7 +571,6 @@ class MediaServerMsgLocal(_PluginBase):
 
             message_texts = []
             
-            # 添加时间及区分 Emoji
             if event_type == "library.new":
                 message_texts.append(f"⏰ 入库时间：{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))}")
             else:
@@ -421,7 +601,66 @@ class MediaServerMsgLocal(_PluginBase):
                 except (ValueError, TypeError):
                     pass
 
+            image_url = getattr(event_info, 'image_url', None)
+            tmdb_id = getattr(event_info, 'tmdb_id', None)
+            season_id, episode_id, _ = self._extract_season_episode(event_info)
             overview = getattr(event_info, 'overview', None)
+
+            tmdb_info = None
+            if tmdb_id:
+                try:
+                    if item_type in ["MOV", "MOVIE"]:
+                        tmdb_info = self._get_tmdb_info(tmdb_id, MediaType.MOVIE)
+                    else:
+                        tmdb_info = self._get_tmdb_info(tmdb_id, MediaType.TV, season_id)
+                except Exception:
+                    pass
+
+            # 追加订阅用户信息，并处理查不到的边界
+            if event_type == "library.new":
+                subscribers = self._get_subscriber_names(tmdb_id)
+                message_texts.append(f"🙋‍♂️ 订阅用户：{subscribers}")
+                if item_type in ["TV", "SHOW", "EPISODE", "SERIES", "SEASON"]:
+                    episode_detail = self._merge_continuous_episodes([event_info])
+                    episode_count = self._get_episode_count([event_info])
+                    if episode_detail:
+                        message_texts.append(f"📺 季集：{episode_detail}")
+                    if episode_count > 1:
+                        message_title += f" {episode_count}集"
+
+            cat = None
+            if tmdb_info:
+                try:
+                    if tmdb_info.get('media_type') == MediaType.TV or item_type in ["TV", "SHOW", "EPISODE", "SERIES", "SEASON"]:
+                        cat = self.category.get_tv_category(tmdb_info)
+                    else:
+                        cat = self.category.get_movie_category(tmdb_info)
+                except Exception:
+                    pass
+            if cat:
+                message_texts.append(f"📚 分类：{cat}")
+
+            if tmdb_info and tmdb_info.get('vote_average'):
+                try:
+                    rating = round(float(tmdb_info.get('vote_average')), 1)
+                    message_texts.append(f"⭐ 评分：{rating}/10")
+                except Exception:
+                    pass
+                
+                genres = tmdb_info.get('genres', [])
+                if genres:
+                    genres_list = []
+                    for g in genres[:3]:
+                        if isinstance(g, dict) and g.get('name'):
+                            genres_list.append(g.get('name'))
+                        elif str(g):
+                            genres_list.append(str(g))
+                    if genres_list:
+                        message_texts.append(f"🎭 类型：{'、'.join(genres_list)}")
+
+            if not overview and tmdb_info:
+                overview = tmdb_info.get('overview', '')
+            
             if overview:
                 if len(overview) > 100:
                     overview = overview[:100] + "..."
@@ -429,101 +668,83 @@ class MediaServerMsgLocal(_PluginBase):
 
             message_content = "\n".join(message_texts)
 
-            image_url = getattr(event_info, 'image_url', None)
-            tmdb_id = getattr(event_info, 'tmdb_id', None)
-            season_id, episode_id, _ = self._extract_season_episode(event_info)
-
-            if item_type in ["MOV", "MOVIE"] and tmdb_id:
+            if not image_url and tmdb_info:
                 try:
-                    image_url = self.chain.obtain_specific_image(
-                        mediaid=tmdb_id,
-                        mtype=MediaType.MOVIE,
-                        image_type=MediaImageType.Poster
-                    )
-                except Exception:
-                    pass
-            elif tmdb_id:
-                try:
-                    specific_image = self.chain.obtain_specific_image(
-                        mediaid=tmdb_id,
-                        mtype=MediaType.TV,
-                        image_type=MediaImageType.Backdrop,
-                        season=season_id,
-                        episode=episode_id
-                    )
-                    if specific_image:
-                        image_url = specific_image
-                except Exception:
-                    pass
-
-            # ========================
-            # 核心代理：套接 ImageLocalCache 专属链接
-            # ========================
-            proxy_base = f"{settings.APP_DOMAIN.rstrip('/')}/api/v1/plugin/ImageLocalCache/img?url=" if settings.APP_DOMAIN else ""
-            if image_url and proxy_base:
-                try:
-                    if "/api/v1/plugin/ImageLocalCache/img?url=" not in image_url:
-                        image_url = f"{proxy_base}{quote(image_url, safe='')}"
+                    tmdb_domain = settings.TMDB_IMAGE_DOMAIN or "image.tmdb.org"
+                    if not tmdb_domain.startswith("http"):
+                        tmdb_domain = f"https://{tmdb_domain}"
+                    tmdb_domain = tmdb_domain.rstrip("/")
+                    
+                    if item_type in ["MOV", "MOVIE"] and tmdb_info.get('poster_path'):
+                        original_url = f"{tmdb_domain}/t/p/original{tmdb_info.get('poster_path')}"
+                        image_url = self._get_cached_image_url(original_url)
+                    elif item_type in ["TV", "SHOW", "EPISODE", "SERIES", "SEASON"] and tmdb_info.get('backdrop_path'):
+                        original_url = f"{tmdb_domain}/t/p/original{tmdb_info.get('backdrop_path')}"
+                        image_url = self._get_cached_image_url(original_url)
                 except Exception as e:
-                    logger.debug(f"图片本地缓存代理处理失败: {str(e)}")
+                    logger.debug(f"提取TMDB代理链接出错: {e}")
 
             if not image_url:
-                channel = getattr(event_info, 'channel', '')
-                image_url = self._webhook_images.get(channel)
+                image_url = self._webhook_images.get(getattr(event_info, 'channel', ''))
+            image_url = self._get_cached_image_url(image_url)
 
             play_link = None
             if self._add_play_link:
                 play_link = self._get_play_link(event_info)
 
-            if str(event_type) == "playback.stop":
-                self.__add_element(expiring_key)
-            if str(event_type) == "playback.start":
-                self.__remove_element(expiring_key)
-
             self.post_message(mtype=NotificationType.MediaServer,
                               title=message_title, text=message_content, image=image_url, link=play_link)
+            
+            logger.info(f"✅ 非聚合通知已送达企业微信: {message_title}")
+            ui_detail = "单条入库事件" if event_type == "library.new" else f"事件: {event_action}"
+            self._record_history(message_title, ui_detail)
 
         except Exception as e:
             logger.error(f"处理Webhook事件时发生错误: {str(e)}", exc_info=True)
 
     def _get_series_id(self, event_info: WebhookEventInfo) -> Optional[str]:
-        """获取剧集ID，强制剥离 TMDB ID 以防假性不聚合"""
+        """按服务器和剧集分组，Series 的父目录不能作为剧集标识。"""
         try:
-            # 1. 优先尝试从路径强制剥离 TMDB ID，这是最稳固的同剧集特征！
+            namespace = f"{getattr(event_info, 'channel', '')}:{getattr(event_info, 'server_name', '')}:"
             item_path = getattr(event_info, 'item_path') or ''
             tmdb_match = re.search(r'[\[{](?:tmdbid|tmdb)[=-](\d+)[\]}]', str(item_path), re.IGNORECASE)
             if tmdb_match:
-                return f"tmdb_{tmdb_match.group(1)}"
+                return f"{namespace}tmdb_{tmdb_match.group(1)}"
 
-            # 2. 尝试提取标准的 SeriesId
             json_object = getattr(event_info, 'json_object', None)
             if json_object and isinstance(json_object, dict):
                 item = json_object.get("Item") or json_object.get("Metadata") or json_object
                 if isinstance(item, dict):
-                    series_id = item.get("SeriesId") or item.get("SeriesName") or item.get("ParentId")
+                    series_id = item.get("SeriesId")
+                    if not series_id and str(item.get("Type", "")).upper() == "SERIES":
+                        series_id = item.get("Id")
+                    series_id = series_id or item.get("SeriesName")
                     if series_id:
-                        return str(series_id)
+                        return namespace + str(series_id)
 
-            # 3. 剥离掉 S01E01 后的纯名字，强制把散落的单集聚类
             item_name = getattr(event_info, 'item_name') or ''
-            name_match = re.split(r'[Ss]\d+\s*[Ee]\d+|第\s*\d+\s*季', str(item_name))
+            name_match = re.split(r'[Ss]\d+\s*[Ee]\d+|第\s*\d+\s*[季集]', str(item_name))
             if name_match and name_match[0].strip():
-                return name_match[0].strip()
+                return namespace + name_match[0].strip()
 
-            # 4. 万无一失的最后兜底
             fallback_id = getattr(event_info, "series_id", None)
             if fallback_id:
-                return str(fallback_id)
+                return namespace + str(fallback_id)
                 
-        except Exception:
-            pass
-        return "unknown_series_fallback"
+        except Exception as e:
+            logger.debug(f"提取 series_id 异常: {e}")
+            
+        return None
 
     def _extract_season_episode(self, event: WebhookEventInfo) -> Tuple[Optional[int], Optional[int], str]:
-        """超级提取引擎：从 Webhook 对象中安全剥离季号、集号和单集名称"""
         try:
-            season = getattr(event, "season_id", None) or getattr(event, "item_season", None) or getattr(event, "season", None)
-            episode = getattr(event, "episode_id", None) or getattr(event, "item_episode", None) or getattr(event, "episode", None)
+            if str(getattr(event, 'item_type', '')).upper() == "SERIES":
+                return None, None, str(getattr(event, 'item_name', ''))
+
+            season = next((getattr(event, key, None) for key in ("season_id", "item_season", "season")
+                           if getattr(event, key, None) is not None), None)
+            episode = next((getattr(event, key, None) for key in ("episode_id", "item_episode", "episode")
+                            if getattr(event, key, None) is not None), None)
             episode_name = getattr(event, "item_name", "") or ""
 
             if str(season).strip() in ("", "None", "null"): season = None
@@ -533,15 +754,15 @@ class MediaServerMsgLocal(_PluginBase):
                 item = event.json_object.get("Item") or event.json_object.get("Metadata") or event.json_object
                 if isinstance(item, dict):
                     if season is None: 
-                        season = item.get("ParentIndexNumber") or item.get("SeasonNumber") or item.get("parentIndex")
+                        season = next((item.get(key) for key in ("ParentIndexNumber", "SeasonNumber", "parentIndex")
+                                       if item.get(key) is not None), None)
                     if episode is None: 
-                        episode = item.get("IndexNumber") or item.get("EpisodeNumber") or item.get("index")
+                        episode = next((item.get(key) for key in ("IndexNumber", "EpisodeNumber", "index")
+                                        if item.get(key) is not None), None)
                     if not episode_name or episode_name == "未知剧集":
                         episode_name = item.get("Name") or item.get("EpisodeName") or item.get("title") or ""
 
-            # 深层降维正则强刷
             if season is None or episode is None:
-                # 安全获取属性并净化 None 值
                 s_name = str(getattr(event, 'item_name', ''))
                 s_path = str(getattr(event, 'item_path', ''))
                 s_json = str(getattr(event, 'json_object', '')) if getattr(event, 'json_object', None) else ""
@@ -571,7 +792,6 @@ class MediaServerMsgLocal(_PluginBase):
                         episode = match_ep.group(1)
                         if season is None: season = 1
 
-            # 安全的提取纯数字函数，防御 int("S01") 引发崩溃
             def safe_extract_digits(val, default):
                 if val is None or str(val).strip() in ("", "None", "null"): return default
                 if isinstance(val, int): return val
@@ -586,45 +806,57 @@ class MediaServerMsgLocal(_PluginBase):
             return 1, None, str(getattr(event, "item_name", ""))
 
     def _aggregate_tv_episodes(self, series_id: str, event_info: WebhookEventInfo):
-        """聚合TV剧集结入库消息（带读写锁隔离保护）"""
         try:
             if not series_id: return
+            item_name = getattr(event_info, 'item_name', '未知集数')
 
             with self._lock:
                 if series_id not in self._pending_messages:
                     self._pending_messages[series_id] = []
                 self._pending_messages[series_id].append(event_info)
+                
+                current_count = self._get_episode_count(self._pending_messages[series_id])
+                current_detail = self._merge_continuous_episodes(self._pending_messages[series_id])
 
-                if series_id in self._aggregate_timers:
-                    try:
-                        self._aggregate_timers[series_id].cancel()
-                    except Exception:
-                        pass
-
-                timer = threading.Timer(self._aggregate_time, self._send_aggregated_message, [series_id])
+                previous_timer = self._aggregate_timers.get(series_id)
+                if previous_timer:
+                    previous_timer.cancel()
+                # 与魔改版保持一致：连续到达的通知将等待时间延后至最后一条之后。
+                timer = threading.Timer(
+                    self._aggregate_time,
+                    lambda: self._send_aggregated_message(series_id, expected_timer=timer)
+                )
+                timer.daemon = True
                 self._aggregate_timers[series_id] = timer
                 timer.start()
+                logger.info(f"📦 剧集 [{series_id}] 将在最后一条通知后 {self._aggregate_time} 秒发送聚合消息")
+                
+                logger.info(f"📥 剧集 [{series_id}] 加入候车室: {item_name} (当前本车共 {current_count} 集, 明细: {current_detail})")
+
         except Exception as e:
             logger.error(f"聚合处理异常: {str(e)}", exc_info=True)
 
-    def _send_aggregated_message(self, series_id: str):
+    def _send_aggregated_message(self, series_id: str, expected_timer: Optional[Any] = None):
         """发送聚合后的TV剧集消息"""
         try:
-            # 加锁从内存中安全弹出数据池
             with self._lock:
+                if expected_timer is not None and self._aggregate_timers.get(series_id) is not expected_timer:
+                    return
                 events = self._pending_messages.pop(series_id, [])
                 self._aggregate_timers.pop(series_id, None)
 
             if not events: return
 
             first_event = events[0]
-            events_count = len(events)
+            events_count = self._get_episode_count(events)
             is_multiple_episodes = events_count > 1
+            episodes_detail = self._merge_continuous_episodes(events)
+            
+            logger.info(f"🚀 聚合窗口期满，开始打包发送 [{series_id}]。本批次包含 {events_count} 个文件，最终明细: {episodes_detail or '未知'}")
 
-            # 智能提取 tmdb_id
-            item_path = getattr(first_event, 'item_path', None)
+            payload_str = f"{getattr(first_event, 'json_object', '')} {getattr(first_event, 'item_path', '')} {getattr(first_event, 'item_name', '')}"
             tmdb_pattern = r'[\[{](?:tmdbid|tmdb)[=-](\d+)[\]}]'
-            if item_path and (match := re.search(tmdb_pattern, str(item_path))):
+            if match := re.search(tmdb_pattern, payload_str, re.IGNORECASE):
                 first_event.tmdb_id = match.group(1)
             else:
                 media_service = self.service_info(name=getattr(first_event, 'server_name', ''))
@@ -636,11 +868,11 @@ class MediaServerMsgLocal(_PluginBase):
                         if info and info.tmdbid:
                             first_event.tmdb_id = info.tmdbid
 
-            s_id, e_id, _ = self._extract_season_episode(first_event)
+            episode_pairs = self._extract_episode_pairs(first_event)
+            s_id, e_id = episode_pairs[0] if episode_pairs else self._extract_season_episode(first_event)[:2]
             tmdb_info = None
 
             def safe_get_overview(tmdb_data, target_ep_id, multiple_eps):
-                """安全提取剧情简述"""
                 if getattr(first_event, 'overview', None):
                     return first_event.overview
                 elif tmdb_data:
@@ -660,21 +892,21 @@ class MediaServerMsgLocal(_PluginBase):
                 show_name = getattr(first_event, 'item_name', '未知剧集')
                 message_title = f"📺 {self._webhook_actions.get(getattr(first_event, 'event', ''), '新入库')}剧集：{show_name}"
                 if is_multiple_episodes:
-                    message_title += f" {events_count}个文件"
+                    message_title += f" {events_count}集"
 
                 message_texts = []
                 message_texts.append(f"⏰ 入库时间：{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))}")
 
-                episodes_detail = self._merge_continuous_episodes(events)
+                subscribers_fb = self._get_subscriber_names(getattr(first_event, 'tmdb_id', None))
+                message_texts.append(f"🙋‍♂️ 订阅用户：{subscribers_fb}")
+
                 if episodes_detail:
                     message_texts.append(f"📺 季集：{episodes_detail}")
 
                 message_content = "\n".join(message_texts)
                 fallback_img = getattr(first_event, 'image_url', None) or self._webhook_images.get(getattr(first_event, 'channel', ''))
                 
-                proxy_b = f"{settings.APP_DOMAIN.rstrip('/')}/api/v1/plugin/ImageLocalCache/img?url=" if settings.APP_DOMAIN else ""
-                if fallback_img and proxy_b and "/api/v1/plugin/ImageLocalCache/img?url=" not in fallback_img:
-                    fallback_img = f"{proxy_b}{quote(fallback_img, safe='')}"
+                fallback_img = self._get_cached_image_url(fallback_img)
 
                 play_link = None
                 if self._add_play_link:
@@ -682,14 +914,16 @@ class MediaServerMsgLocal(_PluginBase):
 
                 self.post_message(mtype=NotificationType.MediaServer,
                                   title=message_title, text=message_content, image=fallback_img, link=play_link)
+                
+                logger.info(f"✅ 聚合通知已降级发送: {message_title}")
+                self._record_history(message_title, episodes_detail or "多集降级聚合")
 
-            # 如果没有提取到 TMDB_ID，直接进降级
             if not getattr(first_event, 'tmdb_id', None):
                 send_fallback_msg()
                 return
 
             # ========= 正常聚合逻辑 =========
-            if str(getattr(first_event, 'item_type', '')).upper() in ["TV", "SHOW", "EPISODE", "SERIES"]:
+            if str(getattr(first_event, 'item_type', '')).upper() in ["TV", "SHOW", "EPISODE", "SERIES", "SEASON"]:
                 try:
                     tmdb_info = self._get_tmdb_info(
                         tmdb_id=first_event.tmdb_id,
@@ -714,12 +948,14 @@ class MediaServerMsgLocal(_PluginBase):
 
             message_title = f"📺 {self._webhook_actions.get(getattr(first_event, 'event', ''), '新入库')}剧集：{show_name}"
             if is_multiple_episodes:
-                message_title += f" {events_count}个文件"
+                message_title += f" {events_count}集"
 
             message_texts = []
             message_texts.append(f"⏰ 入库时间：{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))}")
+
+            subscribers = self._get_subscriber_names(first_event.tmdb_id)
+            message_texts.append(f"🙋‍♂️ 订阅用户：{subscribers}")
             
-            episodes_detail = self._merge_continuous_episodes(events)
             if episodes_detail:
                 message_texts.append(f"📺 季集：{episodes_detail}")
 
@@ -767,8 +1003,7 @@ class MediaServerMsgLocal(_PluginBase):
 
             image_url = None
 
-            # 通过TMDB提取并清洗原生图片，同时注入ImageLocalCache地址
-            if tmdb_info and settings.APP_DOMAIN:
+            if tmdb_info:
                 try:
                     tmdb_domain = settings.TMDB_IMAGE_DOMAIN or "image.tmdb.org"
                     if not tmdb_domain.startswith("http"):
@@ -777,21 +1012,16 @@ class MediaServerMsgLocal(_PluginBase):
                     
                     if not is_multiple_episodes and tmdb_info.get('poster_path'):
                         original_url = f"{tmdb_domain}/t/p/original{tmdb_info.get('poster_path')}"
-                        image_url = f"{settings.APP_DOMAIN.rstrip('/')}/api/v1/plugin/ImageLocalCache/img?url={quote(original_url, safe='')}"
+                        image_url = self._get_cached_image_url(original_url)
                     elif is_multiple_episodes and tmdb_info.get('backdrop_path'):
                         original_url = f"{tmdb_domain}/t/p/original{tmdb_info.get('backdrop_path')}"
-                        image_url = f"{settings.APP_DOMAIN.rstrip('/')}/api/v1/plugin/ImageLocalCache/img?url={quote(original_url, safe='')}"
+                        image_url = self._get_cached_image_url(original_url)
                 except Exception as e:
                     logger.debug(f"聚合消息提取TMDB代理链接出错: {e}")
 
-            # 若未从 TMDB 拿到图，回退取 Webhook 原生附带的 image_url 并套一层代理
             if not image_url:
                 raw_image = getattr(first_event, 'image_url', None) or self._webhook_images.get(getattr(first_event, 'channel', ''))
-                proxy_b = f"{settings.APP_DOMAIN.rstrip('/')}/api/v1/plugin/ImageLocalCache/img?url=" if settings.APP_DOMAIN else ""
-                if raw_image and proxy_b and "/api/v1/plugin/ImageLocalCache/img?url=" not in raw_image:
-                    image_url = f"{proxy_b}{quote(raw_image, safe='')}"
-                else:
-                    image_url = raw_image
+                image_url = self._get_cached_image_url(raw_image)
 
             play_link = None
             if self._add_play_link:
@@ -799,73 +1029,53 @@ class MediaServerMsgLocal(_PluginBase):
 
             self.post_message(mtype=NotificationType.MediaServer,
                               title=message_title, text=message_content, image=image_url, link=play_link)
+            
+            logger.info(f"✅ 完美聚合通知已送达企业微信：{message_title}")
+            self._record_history(message_title, episodes_detail or "已聚合")
 
         except Exception as e:
             logger.error(f"发送聚合消息异常: {str(e)}", exc_info=True)
 
     def _merge_continuous_episodes(self, events: List[WebhookEventInfo]) -> str:
-        """合并连续的集数信息，并使用统一引擎彻底去重和补漏"""
-        season_episodes = {}
-
+        """合并真实季集范围，汇总型 Series 事件不再只显示第一集。"""
+        seasons = {}
+        full_seasons = set()
+        has_summary = False
         for event in events:
-            try:
-                season_key, episode_key, episode_name = self._extract_season_episode(event)
-                if episode_key is None:
-                    continue
-
-                if season_key not in season_episodes:
-                    season_episodes[season_key] = {}
-                    
-                if episode_key not in season_episodes[season_key]:
-                    season_episodes[season_key][episode_key] = episode_name or ""
-            except Exception as e:
-                logger.debug(f"处理集数合并单条记录异常: {e}")
+            pairs = self._extract_episode_pairs(event)
+            for season, episode in pairs:
+                seasons.setdefault(season, set()).add(episode)
+            if pairs:
                 continue
-
-        merged_details = []
-        try:
-            for season in sorted(season_episodes.keys()):
-                ep_dict = season_episodes[season]
-                if not ep_dict:
+            payload = getattr(event, "json_object", None) or {}
+            item = (payload.get("Item") or payload.get("Metadata") or {}) if isinstance(payload, dict) else {}
+            item_type = str(item.get("Type") or getattr(event, "media_type", "")
+                            or getattr(event, "item_type", "")).upper()
+            if item_type == "SEASON":
+                season = item.get("IndexNumber")
+                if season is None:
+                    season, _, _ = self._extract_season_episode(event)
+                if season is not None:
+                    full_seasons.add(int(season))
+            elif item_type == "SERIES":
+                has_summary = True
+        details = []
+        for season in sorted(set(seasons).union(full_seasons)):
+            if season in full_seasons:
+                details.append(f"S{season:02d}全季")
+                continue
+            episodes = sorted(seasons[season])
+            start = end = episodes[0]
+            for episode in episodes[1:] + [None]:
+                if episode is not None and episode == end + 1:
+                    end = episode
                     continue
-                
-                sorted_eps = sorted(ep_dict.keys())
-                start = sorted_eps[0]
-                end = sorted_eps[0]
-
-                for current in sorted_eps[1:]:
-                    if current == end + 1:
-                        end = current
-                    else:
-                        if start == end:
-                            name = ep_dict.get(start, "")
-                            name_str = f" {name}" if name and not str(start) in name else ""
-                            merged_details.append(f"S{season:02d}E{start:02d}{name_str}")
-                        else:
-                            merged_details.append(f"S{season:02d}E{start:02d}-E{end:02d}")
-                        start = current
-                        end = current
-
-                if start == end:
-                    name = ep_dict.get(start, "")
-                    name_str = f" {name}" if name and not str(start) in name else ""
-                    merged_details.append(f"S{season:02d}E{start:02d}{name_str}")
-                else:
-                    merged_details.append(f"S{season:02d}E{start:02d}-E{end:02d}")
-                    
-        except Exception as err:
-            logger.error(f"合并集数信息时出错: {str(err)}")
-            fallback = []
-            for evt_backup in events:
-                try:
-                    s_int, e_int, _ = self._extract_season_episode(evt_backup)
-                    if e_int is not None:
-                        fallback.append(f"S{s_int:02d}E{e_int:02d}")
-                except Exception:
-                    pass
-            return ", ".join(fallback)
-
-        return ", ".join(merged_details)
+                detail = f"S{season:02d}E{start:02d}"
+                if start != end:
+                    detail += f"-E{end:02d}"
+                details.append(detail)
+                start = end = episode
+        return ", ".join(details) or ("剧集更新（未提供集数）" if has_summary else "")
 
     def __add_element(self, key, duration=DEFAULT_EXPIRATION_TIME):
         with self._lock:
@@ -876,7 +1086,6 @@ class MediaServerMsgLocal(_PluginBase):
             self._webhook_msg_keys.pop(key, None)
 
     def __clean_expired_elements(self):
-        """【防御机制】：清理过期播放标记，防止运行长达数月后内存字典无限膨胀导致 OOM"""
         try:
             with self._lock:
                 current_time = time.time()
@@ -945,7 +1154,6 @@ class MediaServerMsgLocal(_PluginBase):
         skip_empty=False
     )
     def _get_tmdb_info(self, tmdb_id: str, mtype: MediaType, season: Optional[int] = None):
-        """【核心修复】：强制字典对象合并，绝对防御 TMDB 宕机返回 None 引发的致命 TypeError 崩溃"""
         try:
             if mtype == MediaType.MOVIE:
                 result = self.chain.tmdb_info(tmdbid=tmdb_id, mtype=mtype)
@@ -966,7 +1174,6 @@ class MediaServerMsgLocal(_PluginBase):
 
     def stop_service(self):
         try:
-            # 清空缓存并安全加锁弹出剩余作业
             with self._lock:
                 pending_series_ids = list(self._pending_messages.keys())
             for series_id in pending_series_ids:
@@ -990,107 +1197,3 @@ class MediaServerMsgLocal(_PluginBase):
                 pass
         except Exception as e:
             logger.error(f"插件停止时发生错误: {str(e)}")
-
-
-# ============================================================
-# 模块级 patch（彻底解决直接读属性的搜索盲区）
-# 该代码块不能删除，这是保证通过本地网络拉取图片的“命根子”！
-# ============================================================
-
-_module_proxy_base = ""
-
-def _module_patch():
-    """
-    保存原始方法并动态替换。
-    核心逻辑：不仅拦截调用方法，还拦截对象的实例化(__init__)，并记录日志，实现可视化代理。
-    """
-    global _module_proxy_base
-
-    if not _module_proxy_base and settings.APP_DOMAIN:
-        _module_proxy_base = f"{settings.APP_DOMAIN.rstrip('/')}/api/v1/plugin/ImageLocalCache/img?url="
-
-    def _wrap_url(url):
-        if not url or not isinstance(url, str):
-            return url
-        if "/plugin/ImageLocalCache/img?url=" in url:
-            return url
-        if _module_proxy_base and ("/t/p/" in url or "tmdb.org" in url):
-            return f"{_module_proxy_base}{quote(url, safe='')}"
-        return url
-
-    # --------------------------------------------------------
-    # 1. 拦截 MediaInfo 的方法 (防动态获取调用)
-    # --------------------------------------------------------
-    if not hasattr(MediaInfo, "_original_get_message_image"):
-        MediaInfo._original_get_message_image = MediaInfo.get_message_image
-        MediaInfo._original_get_poster_image = MediaInfo.get_poster_image
-        MediaInfo._original_get_backdrop_image = MediaInfo.get_backdrop_image
-
-    def _patched_get_message_image(self_obj, *args, **kwargs):
-        url = MediaInfo._original_get_message_image(self_obj, *args, **kwargs)
-        return _wrap_url(url)
-
-    def _patched_get_poster_image(self_obj, *args, **kwargs):
-        url = MediaInfo._original_get_poster_image(self_obj, *args, **kwargs)
-        return _wrap_url(url)
-
-    def _patched_get_backdrop_image(self_obj, *args, **kwargs):
-        url = MediaInfo._original_get_backdrop_image(self_obj, *args, **kwargs)
-        return _wrap_url(url)
-
-    MediaInfo.get_message_image = _patched_get_message_image
-    MediaInfo.get_poster_image = _patched_get_poster_image
-    MediaInfo.get_backdrop_image = _patched_get_backdrop_image
-
-    # --------------------------------------------------------
-    # 2. 拦截 MediaInfo 实例化 (解决企业微信搜索直接读属性的盲区)
-    # --------------------------------------------------------
-    if not hasattr(MediaInfo, "_original_init"):
-        MediaInfo._original_init = MediaInfo.__init__
-
-    def _patched_mediainfo_init(self_obj, *args, **kwargs):
-        MediaInfo._original_init(self_obj, *args, **kwargs)
-        replaced = False
-        
-        if isinstance(getattr(self_obj, "poster_path", None), str):
-            orig = self_obj.poster_path
-            self_obj.poster_path = _wrap_url(orig)
-            if orig != self_obj.poster_path:
-                replaced = True
-                
-        if isinstance(getattr(self_obj, "backdrop_path", None), str):
-            orig = self_obj.backdrop_path
-            self_obj.backdrop_path = _wrap_url(orig)
-            if orig != self_obj.backdrop_path:
-                replaced = True
-                
-        if replaced:
-            title = getattr(self_obj, "title", "") or getattr(self_obj, "original_title", "未知媒体")
-            # 静默后台注入，不再频繁打印影响主日志流
-            pass
-
-    MediaInfo.__init__ = _patched_mediainfo_init
-
-    # --------------------------------------------------------
-    # 3. 拦截 Notification 实例化 (兜底包含 image 字段的普通通知)
-    # --------------------------------------------------------
-    try:
-        from app.schemas.types import Notification
-        if not hasattr(Notification, "_original_init"):
-            Notification._original_init = Notification.__init__
-        
-        def _patched_notification_init(self_obj, *args, **kwargs):
-            Notification._original_init(self_obj, *args, **kwargs)
-            if isinstance(getattr(self_obj, "image", None), str):
-                orig = self_obj.image
-                self_obj.image = _wrap_url(orig)
-                if orig != self_obj.image:
-                    title = getattr(self_obj, "title", "未知通知")
-                    pass
-                
-        Notification.__init__ = _patched_notification_init
-    except Exception as e:
-        logger.debug(f"拦截 Notification 失败: {e}")
-
-# 模块导入时立即安全执行 patch
-_module_patch()

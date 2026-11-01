@@ -12,20 +12,6 @@
       "v1.0.0": "版本重置，图标、author_url统一修复"
     }
   },
-  "imagelocalcache": {
-    "name": "本地图片缓存代理",
-    "description": "将 TMDB 图片缓存到本地，通过插件 API 提供快速访问。自动替换所有 TMDB 图片 URL 为本地缓存地址，带自动化老化清理机制，防止硬盘被无限占用。",
-    "version": "1.1.5",
-    "icon": "https://raw.githubusercontent.com/wenzhanquan/MoviePilot-Plugins/main/plugins.v2/imagelocalcache/icon.png",
-    "labels": "消息通知",
-    "author": "wenzhanquan",
-    "author_url": "https://github.com/wenzhanquan",
-    "level": 1,
-    "history": {
-      "v1.0.0": "初始版本",
-      "v1.1.5": "修复外网直连超时、增加多线程锁防SQLite死锁、新增对象级实例化底层拦截解决企业微信搜索读底层属性盲区、新增实时缓存明细追踪表、新增防重启周期自动清理机制"
-    }
-  },
   "CaishenPTShout": {
     "name": "财神PT喊话",
     "description": "定时在财神PT站点群聊区发送喊话消息，如「财神，求上传」等。自动读取站点Cookie，支持自定义喊话内容和定时间隔。",
@@ -83,8 +69,8 @@
   "MediaServerMsgLocal": {
     "name": "媒体服务器通知本地版",
     "description": "发送Emby/Jellyfin/Plex服务器的播放、入库等通知消息。图片已走本地缓存代理。",
-    "version": "1.0.11",
-    "icon": "https://raw.githubusercontent.com/wenzhanquan/MoviePilot-Plugins/main/plugins.v2/mediaservermsglocal/icon.png",
+    "version": "1.0.31",
+    "icon": "mediaplay.png",
     "labels": "消息通知",
     "author": "wenzhanquan",
     "author_url": "https://github.com/wenzhanquan",
@@ -92,7 +78,10 @@
     "history": {
       "v1.0.0": "基于 MediaServerMsgMod 魔改版，图片 URL 走本地缓存代理",
       "v1.0.1": "修复非聚合入库消息图片未走本地缓存代理的问题",
-      "v1.0.11": "终极重构：新增全量JSON地毯式正则特征扫描彻底解决Emby原包季集数缺失聚合失效问题、新增LRU内存泄露防范机制、增强APP_DOMAIN全协议清洗与TMDB宕机强缓存污染防范、添加完整微信端Emoji排版支持"
+      "v1.0.11": "终极重构：新增全量JSON地毯式正则特征扫描彻底解决Emby原包季集数缺失聚合失效问题、新增LRU内存泄露防范机制、增强APP_DOMAIN全协议清洗与TMDB宕机强缓存污染防范、添加完整微信端Emoji排版支持",
+      "v1.0.29": "修复 Emby 描述中的连续集、不连续集及多季解析，按实际季集去重统计，保留特别篇第零季；隔离服务器聚合并统一图片缓存代理基址。",
+      "v1.0.30": "使用前端内置图标，避免图片代理域名限制；聚合等待从最后一条通知重新计时，忽略已取消的旧定时器回调。",
+      "v1.0.31": "支持 Emby system.webhooktest 测试事件，补充测试通知标题。"
     }
   },
   "HermesNotificationForwarder": {
@@ -107,6 +96,21 @@
     "history": {
       "v2.2": "默认状态改为开启",
       "v2.1": "接收Hermes推送的消息，通过MP通知渠道发送给管理员"
+    }
+  },
+  "ImageLocalCache": {
+    "name": "本地图片缓存代理",
+    "description": "将 TMDB 图片缓存到本地，通过插件 API 提供快速访问。自动替换所有 TMDB 图片 URL 为本地缓存地址，带自动化老化清理机制，防止硬盘被无限占用。",
+    "version": "1.1.6",
+    "icon": "https://raw.githubusercontent.com/wenzhanquan/MoviePilot-Plugins/main/plugins.v2/imagelocalcache/icon.png",
+    "labels": "消息通知",
+    "author": "wenzhanquan",
+    "author_url": "https://github.com/wenzhanquan",
+    "level": 1,
+    "history": {
+      "v1.0.0": "初始版本",
+      "v1.1.5": "修复外网直连超时、增加多线程锁防SQLite死锁、新增对象级实例化底层拦截解决企业微信搜索读底层属性盲区、新增实时缓存明细追踪表、新增防重启周期自动清理机制",
+      "v1.1.6": "缓存命中时根据文件头返回真实 MIME，修复 jpg 地址返回 WebP 后响应类型不一致的问题；索引 ID 统一为 ImageLocalCache。"
     }
   }
 }
