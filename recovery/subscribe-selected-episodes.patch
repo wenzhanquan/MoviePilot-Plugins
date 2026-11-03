@@ -1,0 +1,12 @@
+--- a/app/chain/subscribe.py
++++ b/app/chain/subscribe.py
+@@ -2467,7 +2467,8 @@
+             items = []
+             if mediainfo.type == MediaType.TV:
+                 # 电视剧有集数，使用 episode_list
+-                items = meta.episode_list
++                selected = getattr(context, "selected_episodes", None)
++                items = selected if selected is not None else meta.episode_list
+             elif mediainfo.type == MediaType.MOVIE:
+                 # 电影只有一个条目，设置为 [1]
+                 items = [1]

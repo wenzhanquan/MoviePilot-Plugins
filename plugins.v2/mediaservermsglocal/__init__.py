@@ -42,7 +42,7 @@ class MediaServerMsgLocal(_PluginBase):
     # 使用前端自带资源，避免 HTTP 图标被再次交给域名受限的图片代理。
     plugin_icon = "mediaplay.png"
     
-    plugin_version = "1.0.31"
+    plugin_version = "1.0.33"
     plugin_author = "wenzhanquan"
     author_url = "https://github.com/wenzhanquan"
     plugin_config_prefix = "mediaservermsglocal_"
@@ -439,38 +439,39 @@ class MediaServerMsgLocal(_PluginBase):
             }
         ]
 
-    def _get_subscriber_names(self, tmdb_id: str) -> str:
-        """【性能核弹优化】带着 tmdb_id 潜入 MP 数据库反查订阅此媒体的用户，加入 limit 防内存溢出与死锁"""
+    @staticmethod
+    def _episode_title(base, detail, count):
+        if detail:
+            return base + (' ' if count > 1 else '：') + detail
+        return base + (f' {count}集' if count > 1 else '')
+
+    def _get_subscriber_names(self, tmdb_id: str, season=None) -> str:
         if not tmdb_id:
             return "未知"
         try:
-            from app.db.models.subscribe import Subscribe
-            from app.db.models.user import User
-            from app.db import db
-            
-            # 清洗 tmdb_id 确保纯数字，防 SQL 报错
+            from app.db.subscribe_oper import SubscribeOper
+            from app.db.user_oper import UserOper
             match = re.search(r'\d+', str(tmdb_id))
             if not match:
                 return "未知"
-            clean_tmdbid = int(match.group())
-            
-            # 【优化防御】：强行只取前20条订阅记录，速度维持在毫秒级，防止脏数据无限膨胀导致的卡顿
-            subs = db.session.query(Subscribe).filter(Subscribe.tmdbid == clean_tmdbid).limit(20).all()
-            if not subs:
-                return "未知"
-            
-            users = set()
-            for sub in subs:
-                uid = getattr(sub, 'userid', None) or getattr(sub, 'uid', None)
-                if uid:
-                    u = db.session.query(User).filter(User.id == uid).first()
-                    name = getattr(u, 'name', None) or getattr(u, 'nickname', None)
-                    if name:
-                        users.add(str(name))
-            
-            return "、".join(users) if users else "未知"
-        except Exception as e:
-            logger.debug(f"反查订阅用户异常: {e}")
+            from app.db import SessionFactory
+            from app.db.models.subscribehistory import SubscribeHistory
+            media_id = int(match.group())
+            owners = {s.username for s in SubscribeOper().list_by_tmdbid(media_id, season=season) if s.username}
+            # 完成订阅会从当前表移到历史表，必须保留同一季的实际订阅者。
+            with SessionFactory() as session:
+                query = session.query(SubscribeHistory).filter(SubscribeHistory.tmdbid == media_id)
+                if season is not None:
+                    query = query.filter(SubscribeHistory.season == season)
+                owners.update(s.username for s in query.limit(200).all() if s.username)
+            users = UserOper()
+            names = set()
+            for owner in owners:
+                config = users.get_settings(owner) or {}
+                names.add(str(config.get('nickname') or config.get('wechat_userid') or owner))
+            return "、".join(sorted(names)) if names else "未知"
+        except Exception as exc:
+            logger.warning(f"查询订阅用户失败: {exc}")
             return "未知"
 
     @eventmanager.register(EventType.WebhookMessage)
@@ -618,15 +619,12 @@ class MediaServerMsgLocal(_PluginBase):
 
             # 追加订阅用户信息，并处理查不到的边界
             if event_type == "library.new":
-                subscribers = self._get_subscriber_names(tmdb_id)
+                subscribers = self._get_subscriber_names(tmdb_id, season=season_id)
                 message_texts.append(f"🙋‍♂️ 订阅用户：{subscribers}")
                 if item_type in ["TV", "SHOW", "EPISODE", "SERIES", "SEASON"]:
                     episode_detail = self._merge_continuous_episodes([event_info])
                     episode_count = self._get_episode_count([event_info])
-                    if episode_detail:
-                        message_texts.append(f"📺 季集：{episode_detail}")
-                    if episode_count > 1:
-                        message_title += f" {episode_count}集"
+                    message_title = self._episode_title(message_title, episode_detail, episode_count)
 
             cat = None
             if tmdb_info:
@@ -891,17 +889,15 @@ class MediaServerMsgLocal(_PluginBase):
                 """========= 降级逻辑：未识别出完整元数据时执行 ========="""
                 show_name = getattr(first_event, 'item_name', '未知剧集')
                 message_title = f"📺 {self._webhook_actions.get(getattr(first_event, 'event', ''), '新入库')}剧集：{show_name}"
-                if is_multiple_episodes:
-                    message_title += f" {events_count}集"
+                message_title = self._episode_title(message_title, episodes_detail, events_count)
 
                 message_texts = []
                 message_texts.append(f"⏰ 入库时间：{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))}")
 
-                subscribers_fb = self._get_subscriber_names(getattr(first_event, 'tmdb_id', None))
+                subscribers_fb = self._get_subscriber_names(getattr(first_event, 'tmdb_id', None), season=self._extract_season_episode(first_event)[0])
                 message_texts.append(f"🙋‍♂️ 订阅用户：{subscribers_fb}")
 
-                if episodes_detail:
-                    message_texts.append(f"📺 季集：{episodes_detail}")
+
 
                 message_content = "\n".join(message_texts)
                 fallback_img = getattr(first_event, 'image_url', None) or self._webhook_images.get(getattr(first_event, 'channel', ''))
@@ -947,17 +943,15 @@ class MediaServerMsgLocal(_PluginBase):
                 pass
 
             message_title = f"📺 {self._webhook_actions.get(getattr(first_event, 'event', ''), '新入库')}剧集：{show_name}"
-            if is_multiple_episodes:
-                message_title += f" {events_count}集"
+            message_title = self._episode_title(message_title, episodes_detail, events_count)
 
             message_texts = []
             message_texts.append(f"⏰ 入库时间：{time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))}")
 
-            subscribers = self._get_subscriber_names(first_event.tmdb_id)
+            subscribers = self._get_subscriber_names(first_event.tmdb_id, season=self._extract_season_episode(first_event)[0])
             message_texts.append(f"🙋‍♂️ 订阅用户：{subscribers}")
             
-            if episodes_detail:
-                message_texts.append(f"📺 季集：{episodes_detail}")
+
 
             cat = None
             if tmdb_info:

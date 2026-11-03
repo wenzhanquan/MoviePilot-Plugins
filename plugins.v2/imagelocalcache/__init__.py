@@ -3,10 +3,11 @@ import re
 import uuid
 import time
 import threading
+from hashlib import sha256
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from app.core.config import settings
 from app.core.context import MediaInfo
@@ -33,7 +34,7 @@ class ImageLocalCache(_PluginBase):
         "内置周期性自动清空任务与动态追踪，防止硬盘被无限占用。"
     )
     plugin_icon = "https://raw.githubusercontent.com/wenzhanquan/MoviePilot-Plugins/main/plugins.v2/imagelocalcache/icon.png"
-    plugin_version = "1.1.6"
+    plugin_version = "1.1.7"
     plugin_label = "消息通知"
     plugin_author = "wenzhanquan"
     author_url = "https://github.com/wenzhanquan"
@@ -623,12 +624,28 @@ class ImageLocalCache(_PluginBase):
 
 _module_proxy_base = ""
 
+def _patch_image_helper_cache():
+    """Keep different proxy query URLs separate in MP's second image cache."""
+    from app.helper.image import ImageHelper
+
+    if not hasattr(ImageHelper, '_imagelocalcache_original_cache_path'):
+        ImageHelper._imagelocalcache_original_cache_path = staticmethod(ImageHelper._prepare_cache_path)
+    original = ImageHelper._imagelocalcache_original_cache_path
+
+    def cache_path(url):
+        if urlsplit(url).path.rstrip('/').endswith('/api/v1/plugin/ImageLocalCache/img'):
+            return f"imagelocalcache/{sha256(url.encode('utf-8')).hexdigest()}.jpg"
+        return original(url)
+
+    ImageHelper._prepare_cache_path = staticmethod(cache_path)
+
 def _module_patch():
     """
     保存原始方法并动态替换。
     核心逻辑：不仅拦截调用方法，还拦截对象的实例化(__init__)，并记录日志，实现可视化代理。
     """
     global _module_proxy_base
+    _patch_image_helper_cache()
 
     if not _module_proxy_base and settings.APP_DOMAIN:
         _module_proxy_base = f"{settings.APP_DOMAIN.rstrip('/')}/api/v1/plugin/ImageLocalCache/img?url="

@@ -19,7 +19,7 @@ class MpPluginHealthCheck(_PluginBase):
     plugin_name = "MP插件健康检测"
     plugin_desc = "定时检测已安装插件状态变化"
     plugin_icon = "https://raw.githubusercontent.com/wenzhanquan/MoviePilot-Plugins/main/plugins.v2/mppluginhealthcheck/icon.png"
-    plugin_version = "1.0.1"
+    plugin_version = "1.0.2"
     plugin_author = "wenzhanquan"
     author_url = "https://github.com/wenzhanquan"
     plugin_order = 31
@@ -75,6 +75,7 @@ class MpPluginHealthCheck(_PluginBase):
                 "path": "/update_snapshot",
                 "endpoint": self._api_update_snapshot,
                 "methods": ["GET"],
+                "auth": "bear",
                 "summary": "更新插件快照，以当前已安装插件列表为基准",
             }
         ]
@@ -82,7 +83,9 @@ class MpPluginHealthCheck(_PluginBase):
     def _api_update_snapshot(self) -> dict:
         """API 处理：更新插件快照，以当前已安装插件列表为基准。"""
         current = self.__get_plugin_list()
-        self.__save_snapshot(current)
+        if not current:
+            return {"success": False, "message": "插件列表为空，保留原快照"}
+        self.__save_snapshot(current, source="手动快照")
         msg = f"快照已更新，共 {len(current)} 个插件"
         logger.info(f"MP插件健康检测: {msg}")
         return {"success": True, "message": msg}
@@ -196,7 +199,7 @@ class MpPluginHealthCheck(_PluginBase):
                                         "text": "更新当前快照",
                                         "events": {
                                             "click": {
-                                                "api": "plugin/MpPluginHealthCheck/update_snapshot?apikey=",
+                                                "api": "plugin/MpPluginHealthCheck/update_snapshot",
                                                 "method": "get"
                                             }
                                         }
@@ -234,6 +237,8 @@ class MpPluginHealthCheck(_PluginBase):
         返回插件详情页面，展示执行历史。
         """
         history = self.get_data("_history") or []
+        snapshot = self.get_data("_snapshot_meta") or {}
+        baseline_text = f"对比基准：{snapshot.get('time', '旧快照（时间未记录）')} · {snapshot.get('source', '历史基准')} · {snapshot.get('count', '?')} 个插件。手动快照会重设基准；定时检测与保存的基准比较后推进状态。版本变更表示已安装版本发生改变，不是远端有可用更新。"
         if not history or not isinstance(history, list):
             return [{
                 "component": "VAlert",
@@ -248,7 +253,7 @@ class MpPluginHealthCheck(_PluginBase):
         plugin_count = today.get("plugin_count", 0)
         total_changes = sum(1 for r in recent if r.get("has_changes"))
         total_ok = len(recent) - total_changes
-        return [
+        return [{"component": "VAlert", "props": {"type": "info", "variant": "tonal"}, "text": baseline_text},
             # 历史记录表格 - 放在最上方
             {
                 "component": "VRow",
@@ -448,12 +453,16 @@ class MpPluginHealthCheck(_PluginBase):
             logger.error(f"获取插件列表失败: {str(e)}")
             return []
 
-    def __save_snapshot(self, plugins: List[dict]):
+    def __save_snapshot(self, plugins: List[dict], source="定时检测"):
         try:
             self.save_data(self._snapshot_key, plugins)
+            if self.get_data(self._snapshot_key) != plugins:
+                raise RuntimeError("快照写入校验失败")
+            self.save_data("_snapshot_meta", {"time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "source": source, "count": len(plugins)})
             logger.info(f"已保存 {len(plugins)} 个插件快照")
         except Exception as e:
             logger.error(f"保存插件快照失败: {str(e)}")
+            raise
 
     def __load_snapshot(self) -> List[dict]:
         try:
@@ -567,8 +576,8 @@ class MpPluginHealthCheck(_PluginBase):
                 ov = p.get("version", "")
                 nv = cp.get("version", "")
                 if ov and nv and ov != nv:
-                    changes.append(f"升级: {cp['name']} {ov}->{nv}")
-                    logger.info(f"  插件升级: {cp['name']} {ov}->{nv}")
+                    changes.append(f"版本变更: {cp['name']} {ov}->{nv}")
+                    logger.info(f"  插件版本变更: {cp['name']} {ov}->{nv}")
                     upgraded_names.append(f"{cp['name']} {ov}->{nv}")
         for pid, p in current_map.items():
             if pid not in baseline_map:
@@ -576,16 +585,9 @@ class MpPluginHealthCheck(_PluginBase):
                 logger.info(f"  插件新增: {p['name']} v{p.get('version', '?')}")
                 new_names.append(f"{p['name']} v{p.get('version', '?')}")
 
-        # 升级后更新快照版本号，保持插件数量不变
-        if upgraded_names:
-            for item in baseline:
-                pid = item["id"]
-                pid_lower = pid.lower()
-                if pid_lower in current_map:
-                    nv = current_map[pid_lower].get("version", "")
-                    if item.get("version", "") != nv:
-                        item["version"] = nv
-            self.__save_snapshot(baseline)
+        # 已存在/新增插件推进到本次状态，丢失项保留以便下次重试恢复。
+        next_baseline = list(current) + [p for p in baseline if p['id'].lower() not in current_map]
+        self.__save_snapshot(next_baseline)
 
         # 自动安装丢失的插件
         if lost_plugin_ids and self._auto_install:

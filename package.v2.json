@@ -42,7 +42,7 @@
   "MpPluginHealthCheck": {
     "name": "MP插件健康检测",
     "description": "定时检测已安装插件状态变化",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "icon": "https://raw.githubusercontent.com/wenzhanquan/MoviePilot-Plugins/main/plugins.v2/mppluginhealthcheck/icon.png",
     "labels": "系统工具",
     "author": "wenzhanquan",
@@ -69,7 +69,7 @@
   "MediaServerMsgLocal": {
     "name": "媒体服务器通知本地版",
     "description": "发送Emby/Jellyfin/Plex服务器的播放、入库等通知消息。图片已走本地缓存代理。",
-    "version": "1.0.31",
+    "version": "1.0.33",
     "icon": "mediaplay.png",
     "labels": "消息通知",
     "author": "wenzhanquan",
@@ -103,7 +103,7 @@
   "ImageLocalCache": {
     "name": "本地图片缓存代理",
     "description": "将 TMDB 图片缓存到本地，通过插件 API 提供快速访问。自动替换所有 TMDB 图片 URL 为本地缓存地址，内置周期性自动清空任务与动态追踪，防止硬盘被无限占用。",
-    "version": "1.1.6",
+    "version": "1.1.7",
     "icon": "https://raw.githubusercontent.com/wenzhanquan/MoviePilot-Plugins/main/plugins.v2/imagelocalcache/icon.png",
     "labels": "消息通知",
     "author": "wenzhanquan",

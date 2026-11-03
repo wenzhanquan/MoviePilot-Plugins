@@ -136,8 +136,9 @@ def test_aggregated_notification_title_detail_and_cached_image(plugin_class, has
     plugin._send_aggregated_message('demo')
     plugin.post_message.assert_called_once()
     message = plugin.post_message.call_args.kwargs
-    assert message['title'].endswith('2集')
-    assert 'S01E26-E27' in message['text']
+    assert message['title'].endswith('S01E26-E27')
+    assert 'S01E26-E27' in message['title']
+    assert '📺 季集：' not in message['text']
     assert message['image'].startswith('http://cache.local/api/v1/plugin/ImageLocalCache/img?url=')
 
 
@@ -156,8 +157,9 @@ def test_no_aggregation_notification_retains_all_episodes(plugin_class):
     event.event = 'library.new'
     plugin.send(SimpleNamespace(event_data=event))
     message = plugin.post_message.call_args.kwargs
-    assert 'S01E25, S01E29' in message['text']
-    assert message['title'].endswith('2集')
+    assert 'S01E25, S01E29' in message['title']
+    assert '📺 季集：' not in message['text']
+    assert message['title'].endswith('S01E25, S01E29')
 
 
 def test_normalized_special_season_without_raw_item(plugin_class):
